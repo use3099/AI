@@ -72,6 +72,20 @@ if [ -f "$APP_DIR/.env" ]; then
   # shellcheck disable=SC1091
   . "$APP_DIR/.env"
 fi
+# 端口检查：80 用来申请证书，必须空着；443 被占用（比如跑着节点）就改用 8443，再由 Cloudflare 转发
+port_busy() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q . && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^relay-caddy$'; }
+HTTP_PORT=80
+if port_busy 80; then
+  ss -ltnp "sport = :80" | tail -n +2
+  die "80 端口被上面的程序占用了，申请 HTTPS 证书需要它，请先停掉或换端口再运行"
+fi
+HTTPS_PORT=${HTTPS_PORT:-443}
+if [ "$HTTPS_PORT" = 443 ] && port_busy 443; then
+  warn "443 端口已被占用（$(ss -ltnpH 'sport = :443' | grep -o '(("[^"]*' | head -1 | tr -d '(\"')），网站改用 8443 端口，不影响原来的程序"
+  HTTPS_PORT=8443
+  port_busy 8443 && die "8443 端口也被占用了，请告诉我们换一个端口"
+fi
+
 DB_PASSWORD=${DB_PASSWORD:-$(rand 24)}
 REDIS_PASSWORD=${REDIS_PASSWORD:-$(rand 24)}
 SESSION_SECRET=${SESSION_SECRET:-$(rand 48)}
@@ -87,17 +101,19 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 SESSION_SECRET=$SESSION_SECRET
 CRYPTO_SECRET=$CRYPTO_SECRET
 TZ=Asia/Shanghai
+HTTP_PORT=$HTTP_PORT
+HTTPS_PORT=$HTTPS_PORT
 EOF
 chmod 600 "$APP_DIR/.env"
 
 # 防火墙放行 80/443（有 ufw 才处理）
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
-  ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 443/udp
+  ufw allow 80/tcp; ufw allow "$HTTPS_PORT"/tcp; ufw allow "$HTTPS_PORT"/udp
 fi
 
 cd "$APP_DIR"
 say "启动服务（第一次要下载镜像，约 1-3 分钟）…"
-docker compose up -d
+docker compose up -d --remove-orphans
 
 say "等待后端就绪…"
 for _ in $(seq 1 60); do
@@ -119,6 +135,15 @@ echo "  2. 系统设置 → 服务器地址 填  https://$DOMAIN   (易支付回
 echo "  3. 支付设置 → 填易支付 商户ID / 密钥 / 接口地址，支付方式勾选 alipay、wxpay"
 echo "  4. 渠道 → 添加上游 AI 渠道（OpenAI / Claude / Gemini 等的 Key）"
 echo
+if [ "$HTTPS_PORT" != 443 ]; then
+  echo
+  echo " ⚠️ 网站在 $HTTPS_PORT 端口。先用浏览器打开 https://$DOMAIN:$HTTPS_PORT 确认能打开，"
+  echo "    然后在 Cloudflare 做转发，用户访问时就不用带端口号："
+  echo "    1) DNS：$DOMAIN 和 $ADMIN_DOMAIN 两条记录改成橙色云朵（已代理）"
+  echo "    2) SSL/TLS → 概述：加密模式选「完全(严格)」"
+  echo "    3) 规则 → Origin Rules → 创建规则：主机名 等于 $DOMAIN 或 $ADMIN_DOMAIN，"
+  echo "       目标端口 改写为 $HTTPS_PORT"
+fi
 echo " 配置文件和数据都在 $APP_DIR ，请定期备份 $APP_DIR/data"
 echo "==============================================="
 exit 0
