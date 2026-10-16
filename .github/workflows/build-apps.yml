@@ -9,12 +9,19 @@ on:
         description: 版本号
         required: true
         default: 1.0.0
+      site_url:
+        description: 网站地址（留空则用仓库变量 SITE_URL）
+        required: false
+      publish:
+        description: 发布到 Releases
+        type: boolean
+        default: true
   push:
     tags: ['v*']
 
 env:
   # 在仓库 Settings → Secrets and variables → Actions → Variables 里设置：
-  SITE_URL: ${{ vars.SITE_URL }}                       # 例如 https://api.example.com
+  SITE_URL: ${{ github.event.inputs.site_url || vars.SITE_URL }}                       # 例如 https://api.example.com
   APP_NAME: ${{ vars.APP_NAME || 'AI Relay' }}
   APP_ID: ${{ vars.APP_ID || 'com.airelay.app' }}
   APP_VERSION: ${{ github.event.inputs.version || github.ref_name }}
@@ -121,6 +128,7 @@ jobs:
 
   release:
     needs: [android, ios, desktop]
+    if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions: { contents: write }
     steps:
