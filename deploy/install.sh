@@ -29,7 +29,8 @@ ensure_docker() {
   docker compose version >/dev/null 2>&1 || die "docker compose 不可用，请升级 Docker"
 }
 
-rand() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-32}"; }
+# 生成随机密码（不用管道，避免 pipefail 下 SIGPIPE 导致脚本静默退出）
+rand() { local s; s=$(LC_ALL=C tr -dc 'A-Za-z0-9' < <(head -c 2048 /dev/urandom)); printf '%s' "${s:0:${1:-32}}"; }
 
 if [ "${1:-}" = "update" ]; then
   [ -f "$APP_DIR/.env" ] || die "还没安装过，请先直接运行 bash install.sh"
@@ -90,7 +91,7 @@ EOF
 chmod 600 "$APP_DIR/.env"
 
 # 防火墙放行 80/443（有 ufw 才处理）
-if command -v ufw >/dev/null 2>&1 && ufw status | grep -q active; then
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: active'; then
   ufw allow 80/tcp; ufw allow 443/tcp; ufw allow 443/udp
 fi
 
