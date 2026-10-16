@@ -5,7 +5,7 @@ window.SITE = {
   tagline: '一个密钥，接入 Claude、GPT、Gemini 等主流模型',
   taglineEn: 'One key for Claude, GPT, Gemini and more',
   // API 地址：留空 = 自动用当前网址。App 内也会自动用打开的网站地址。
-  apiBase: '',
+  apiBase: '',   // 正式地址：https://lanren666666.online
   // 客服 / 交流群（留空则不显示）
   support: { label: 'Telegram 交流群', url: '' },
   // App 下载地址（下载页使用，留空则隐藏对应按钮）

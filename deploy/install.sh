@@ -59,8 +59,10 @@ echo
 
 read -rp "主域名: " DOMAIN
 [ -n "$DOMAIN" ] || die "主域名不能为空"
-read -rp "后台域名 [admin.${DOMAIN#*.}]: " ADMIN_DOMAIN
-ADMIN_DOMAIN=${ADMIN_DOMAIN:-admin.${DOMAIN#*.}}
+# 根域名（如 example.com）默认后台用 admin.example.com；子域名（如 api.example.com）也用 admin.example.com
+if [ "$(echo "$DOMAIN" | tr -cd '.' | wc -c)" -ge 2 ]; then DEF_ADMIN="admin.${DOMAIN#*.}"; else DEF_ADMIN="admin.$DOMAIN"; fi
+read -rp "后台域名 [$DEF_ADMIN]: " ADMIN_DOMAIN
+ADMIN_DOMAIN=${ADMIN_DOMAIN:-$DEF_ADMIN}
 
 ensure_docker
 
