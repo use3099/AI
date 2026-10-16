@@ -1,0 +1,7 @@
+node_modules/
+app/android/
+app/ios/
+app/release/
+app/site.json
+app/capacitor.config.json
+*.keystore

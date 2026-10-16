@@ -1,0 +1,135 @@
+name: 构建 App（Android / iOS / Windows / macOS）
+
+# 在 GitHub 网页 → Actions → 本工作流 → Run workflow 手动触发；
+# 或推送 v 开头的标签（如 v1.0.1）自动触发并发布 Release。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 版本号
+        required: true
+        default: 1.0.0
+  push:
+    tags: ['v*']
+
+env:
+  # 在仓库 Settings → Secrets and variables → Actions → Variables 里设置：
+  SITE_URL: ${{ vars.SITE_URL }}                       # 例如 https://api.example.com
+  APP_NAME: ${{ vars.APP_NAME || 'AI Relay' }}
+  APP_ID: ${{ vars.APP_ID || 'com.airelay.app' }}
+  APP_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: app } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - name: 安装依赖并生成配置
+        run: |
+          export APP_VERSION="${APP_VERSION#v}"
+          npm install --no-audit --no-fund
+          npm run configure
+          npx cap add android
+          npx capacitor-assets generate --android --iconBackgroundColor '#F2F5F9' --splashBackgroundColor '#F2F5F9' || true
+          npx cap sync android
+      - name: 写入版本号与签名
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          V="${APP_VERSION#v}"
+          CODE=$(echo "$V" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}')
+          sed -i "s/versionCode .*/versionCode $CODE/; s/versionName .*/versionName \"$V\"/" android/app/build.gradle
+          echo "$KEYSTORE_B64" | base64 -d > android/app/release.keystore
+          cat >> android/app/build.gradle <<EOF
+          android {
+            signingConfigs { release { storeFile file('release.keystore'); storePassword System.getenv('KEYSTORE_PASSWORD'); keyAlias 'relay'; keyPassword System.getenv('KEYSTORE_PASSWORD') } }
+            buildTypes { release { signingConfig signingConfigs.release; minifyEnabled false } }
+          }
+          EOF
+      - name: 打包 APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: cd android && ./gradlew assembleRelease --no-daemon && cp app/build/outputs/apk/release/app-release.apk ../app.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: app/app.apk }
+
+  ios:
+    runs-on: macos-latest
+    defaults: { run: { working-directory: app } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: 安装依赖并生成配置
+        run: |
+          export APP_VERSION="${APP_VERSION#v}"
+          npm install --no-audit --no-fund
+          npm run configure
+          npx cap add ios
+          npx capacitor-assets generate --ios --iconBackgroundColor '#F2F5F9' --splashBackgroundColor '#F2F5F9' || true
+          npx cap sync ios
+      - name: 打包未签名 ipa（用全能签等工具自签安装）
+        run: |
+          V="${APP_VERSION#v}"
+          cd ios/App
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" App/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" App/Info.plist
+          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphoneos \
+            -archivePath build/App.xcarchive archive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -20
+          mkdir -p Payload
+          cp -R build/App.xcarchive/Products/Applications/App.app Payload/
+          zip -qry ../../app.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: ios, path: app/app.ipa }
+
+  desktop:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: dist:win
+            file: release/*.exe
+            out: app-setup.exe
+          - os: macos-latest
+            target: dist:mac
+            file: release/*.dmg
+            out: app.dmg
+    runs-on: ${{ matrix.os }}
+    defaults: { run: { working-directory: app, shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: 打包桌面版
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          export APP_VERSION="${APP_VERSION#v}"
+          npm install --no-audit --no-fund
+          npm run configure
+          npm run ${{ matrix.target }}
+          cp ${{ matrix.file }} ${{ matrix.out }}
+      - uses: actions/upload-artifact@v4
+        with: { name: desktop-${{ matrix.os }}, path: app/${{ matrix.out }} }
+
+  release:
+    needs: [android, ios, desktop]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: 发布到 Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', github.event.inputs.version) }}
+          name: ${{ env.APP_NAME }} ${{ env.APP_VERSION }}
+          files: out/*
+          make_latest: true

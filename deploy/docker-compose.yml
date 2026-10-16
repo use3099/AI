@@ -1,0 +1,77 @@
+services:
+  new-api:
+    image: calciumion/new-api:latest
+    container_name: new-api
+    restart: always
+    command: --log-dir /app/logs
+    volumes:
+      - ./data/new-api:/data
+      - ./logs:/app/logs
+    environment:
+      - SQL_DSN=postgresql://newapi:${DB_PASSWORD}@postgres:5432/newapi
+      - REDIS_CONN_STRING=redis://:${REDIS_PASSWORD}@redis:6379
+      - SESSION_SECRET=${SESSION_SECRET}
+      - CRYPTO_SECRET=${CRYPTO_SECRET}
+      - TZ=${TZ:-Asia/Shanghai}
+      # HTTPS 下的登录 Cookie 与来源校验（前台和后台两个域名都要列上）
+      - SESSION_COOKIE_SECURE=true
+      - SESSION_COOKIE_TRUSTED_URL=https://${DOMAIN},https://${ADMIN_DOMAIN}
+      # 只信任 Docker 内网里的 Caddy，用于识别用户真实 IP
+      - TRUSTED_PROXIES=172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+      - ERROR_LOG_ENABLED=true
+      - BATCH_UPDATE_ENABLED=true
+      - NODE_NAME=new-api-node-1
+    depends_on:
+      - redis
+      - postgres
+    networks: [relay]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3000/api/status | grep -o '\"success\":\\s*true' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    container_name: relay-redis
+    restart: always
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - ./data/redis:/data
+    networks: [relay]
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: relay-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: newapi
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: newapi
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks: [relay]
+
+  # Caddy：自动申请 HTTPS 证书；主域名 = 用户前台，admin 子域名 = new-api 自带管理后台
+  caddy:
+    image: caddy:2-alpine
+    container_name: relay-caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - DOMAIN=${DOMAIN}
+      - ADMIN_DOMAIN=${ADMIN_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./web:/srv/web:ro
+      - ./data/caddy:/data
+    depends_on:
+      - new-api
+    networks: [relay]
+
+networks:
+  relay:
+    driver: bridge

@@ -1,0 +1,36 @@
+{
+  "name": "ai-relay-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 中转站 App 外壳：Android / iOS (Capacitor) 与 Windows / macOS (Electron)，内容直接加载线上网站，网站更新 App 即同步更新",
+  "main": "electron/main.js",
+  "scripts": {
+    "configure": "node scripts/configure.js",
+    "desktop": "electron .",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist:mac": "electron-builder --mac dmg --universal"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.0.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.airelay.app",
+    "productName": "AI Relay",
+    "directories": { "output": "release" },
+    "files": ["electron/**/*", "www/**/*", "site.json", "package.json"],
+    "win": { "icon": "resources/icon.png" },
+    "mac": { "icon": "resources/icon.png", "category": "public.app-category.developer-tools", "identity": null },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "shortcutName": "AI Relay" }
+  }
+}

@@ -1,0 +1,47 @@
+{
+	# 证书到期提醒邮箱可在此填写，例如: email you@example.com
+}
+
+# ───────── 用户前台 + API 入口（主域名） ─────────
+{$DOMAIN} {
+	encode zstd gzip
+
+	# 易支付付款完成后，new-api 会跳回 /usage-logs，这里转到前台的账单页
+	redir /usage-logs* /#/billing?paid=1 302
+	redir /console* /#/dashboard 302
+	# 邀请链接、重置密码邮件里的链接，转到前台对应页面
+	redir /sign-up* /#/register?{query} 302
+	redir /register* /#/register?{query} 302
+	redir /user/reset* /#/reset?{query} 302
+	redir /login* /#/login 302
+
+	# 前台静态文件（hash 路由，不会和后端路径冲突）
+	@static path / /index.html /config.js /favicon.svg /manifest.webmanifest /sw.js /assets/* /download/*
+	handle @static {
+		root * /srv/web
+		header /assets/* Cache-Control "public, max-age=3600"
+		header /config.js Cache-Control "no-cache"
+		header /index.html Cache-Control "no-cache"
+		header / Cache-Control "no-cache"
+		file_server
+	}
+
+	# 其余全部交给 new-api：/api/* 管理接口、/v1/* 等 AI 转发接口
+	handle {
+		reverse_proxy new-api:3000 {
+			flush_interval -1
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+		}
+	}
+}
+
+# ───────── 管理后台（new-api 自带界面，只给你自己用） ─────────
+{$ADMIN_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy new-api:3000 {
+		flush_interval -1
+	}
+}
