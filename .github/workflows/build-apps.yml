@@ -52,6 +52,10 @@ jobs:
           V="${APP_VERSION#v}"
           CODE=$(echo "$V" | awk -F. '{printf "%d", $1*10000 + $2*100 + $3}')
           sed -i "s/versionCode .*/versionCode $CODE/; s/versionName .*/versionName \"$V\"/" android/app/build.gradle
+          if [ -z "$KEYSTORE_B64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::warning::没有设置安卓签名 Secrets，本次只打测试包（不能覆盖升级正式版）"
+            exit 0
+          fi
           echo "$KEYSTORE_B64" | base64 -d > android/app/release.keystore
           cat >> android/app/build.gradle <<EOF
           android {
@@ -62,7 +66,14 @@ jobs:
       - name: 打包 APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: cd android && ./gradlew assembleRelease --no-daemon && cp app/build/outputs/apk/release/app-release.apk ../app.apk
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          cd android
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            ./gradlew assembleRelease --no-daemon && cp app/build/outputs/apk/release/app-release.apk ../app.apk
+          else
+            ./gradlew assembleDebug --no-daemon && cp app/build/outputs/apk/debug/app-debug.apk ../app.apk
+          fi
       - uses: actions/upload-artifact@v4
         with: { name: android, path: app/app.apk }
 
@@ -124,7 +135,9 @@ jobs:
           npm run ${{ matrix.target }}
           cp ${{ matrix.file }} ${{ matrix.out }}
       - uses: actions/upload-artifact@v4
-        with: { name: desktop-${{ matrix.os }}, path: app/${{ matrix.out }} }
+        with:
+          name: desktop-${{ matrix.os }}
+          path: app/${{ matrix.out }}
 
   release:
     needs: [android, ios, desktop]
