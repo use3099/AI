@@ -25,12 +25,12 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.airelay.app",
-    "productName": "AI Relay",
+    "appId": "com.xingshu.api",
+    "productName": "星枢 API",
     "directories": { "output": "release" },
     "files": ["electron/**/*", "www/**/*", "site.json", "package.json"],
     "win": { "icon": "resources/icon.png" },
     "mac": { "icon": "resources/icon.png", "category": "public.app-category.developer-tools", "identity": null },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "shortcutName": "AI Relay" }
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "shortcutName": "星枢 API" }
   }
 }

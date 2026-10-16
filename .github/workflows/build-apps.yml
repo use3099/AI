@@ -22,8 +22,8 @@ on:
 env:
   # 在仓库 Settings → Secrets and variables → Actions → Variables 里设置：
   SITE_URL: ${{ github.event.inputs.site_url || vars.SITE_URL }}                       # 例如 https://api.example.com
-  APP_NAME: ${{ vars.APP_NAME || 'AI Relay' }}
-  APP_ID: ${{ vars.APP_ID || 'com.airelay.app' }}
+  APP_NAME: ${{ vars.APP_NAME || '星枢 API' }}
+  APP_ID: ${{ vars.APP_ID || 'com.xingshu.api' }}
   APP_VERSION: ${{ github.event.inputs.version || github.ref_name }}
 
 jobs:

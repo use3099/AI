@@ -8,8 +8,8 @@ if (!/^https:\/\//.test(siteUrl)) {
   console.error('SITE_URL 必须是 https:// 开头的网站地址');
   process.exit(1);
 }
-const appName = process.env.APP_NAME || 'AI Relay';
-const appId = process.env.APP_ID || 'com.airelay.app';
+const appName = process.env.APP_NAME || '星枢 API';
+const appId = process.env.APP_ID || 'com.xingshu.api';
 const version = process.env.APP_VERSION || '1.0.0';
 const host = new URL(siteUrl).host;
 

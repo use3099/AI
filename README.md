@@ -1,4 +1,4 @@
-# AI 中转站（基于 new-api）
+# 星枢 API（基于 new-api 的 AI 中转站）
 
 后端直接用开源的 [new-api](https://github.com/QuantumNous/new-api) 管账户、计费、充值和转发；这个仓库提供：
 
@@ -35,8 +35,7 @@
 
 1. 仓库 **Settings → Secrets and variables → Actions → Variables** 新建：
    - `SITE_URL` = `https://主域名`（必填）
-   - `APP_NAME` = App 名字
-   - `APP_ID` = 包名，例如 `com.xingshu.api`（定了以后别改，否则用户要卸载重装）
+   - `APP_NAME`、`APP_ID` 不用设，默认就是「星枢 API」和 `com.xingshu.api`（包名定了以后别改，否则用户要卸载重装）
 2. **Actions → 构建 App → Run workflow**，填版本号。大约 15 分钟后在 **Releases** 里能下载：
    - `app.apk` — 安卓
    - `app.ipa` — 苹果（未签名，用全能签等工具自签）
