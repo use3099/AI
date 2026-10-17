@@ -180,7 +180,10 @@ textarea.input { height: auto; min-height: 90px; padding: 12px 14px; resize: ver
 .code-win .k { color: #8FA9C8; } .code-win .s { color: #2BC2A8; }
 .apps { max-width: 1180px; width: 100%; margin: 0 auto 72px; padding: 0 clamp(16px, 4vw, 40px); }
 .apps h2 { text-align: center; }
-.app-grid { margin-top: 32px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 14px; }
+.apps-web { margin-top: 12px; text-align: center; color: var(--slate); font-size: 15px; }
+.apps-web a { color: var(--jade); font-weight: 600; text-decoration: none; margin-left: 4px; }
+.apps-web a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.app-grid { margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); align-items: start; gap: 14px; }
 .app-tile { display: flex; flex-direction: column; gap: 4px; padding: 22px 24px; border-radius: 22px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); text-decoration: none; transition: transform .3s cubic-bezier(.34,1.5,.64,1), border-color .25s; }
 .app-tile:hover { transform: translateY(-3px); border-color: var(--wire); }
 .app-tile b { font-size: 18px; font-weight: 600; }

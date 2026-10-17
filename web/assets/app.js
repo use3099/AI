@@ -114,7 +114,6 @@
     const webApp = SITE.webApp === undefined ? '/app/' : SITE.webApp;
     const dl = SITE.downloads || {};
     const apps = [
-      webApp && !C.inApp ? { href: webApp, name: t('dl.web'), meta: t('dl.webMeta'), main: true, open: true } : null,
       dl.android ? { href: dl.android, name: 'Android', meta: t('land.app.apk') } : null,
       dl.windows ? { href: dl.windows, name: 'Windows', meta: t('land.app.exe') } : null,
       dl.mac ? { href: dl.mac, name: 'macOS', meta: t('land.app.dmg') } : null,
@@ -173,7 +172,8 @@ client.chat.completions.create(
         </section>
         <section class="price-strip" id="price-strip"></section>
         ${apps.length ? `<section class="apps"><h2 class="serif">${t('land.apps')}</h2>
-          <div class="app-grid">${apps.map(a => `<a class="app-tile${a.main ? ' main' : ''}" href="${esc(a.href)}"${a.open ? '' : ' download'}><b>${esc(a.name)}</b><span>${esc(a.meta)}</span></a>`).join('')}</div></section>` : ''}
+          ${webApp && !C.inApp ? `<p class="apps-web">${t('land.noInstall')}<a href="${esc(webApp)}">${t('land.web')}</a></p>` : ''}
+          <div class="app-grid">${apps.map(a => `<a class="app-tile" href="${esc(a.href)}" download><b>${esc(a.name)}</b><span>${esc(a.meta)}</span></a>`).join('')}</div></section>` : ''}
         <footer class="footer">© ${new Date().getFullYear()} ${esc(brandName())}${C.inApp ? '' : ` · <a href="#/download">${t('nav.download')}</a>`}</footer>
       </div>`;
     bindLang('lang-top');

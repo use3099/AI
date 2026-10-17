@@ -13,7 +13,7 @@
     'land.prices': '部分模型价格', 'land.allPrices': '查看全部模型价格',
     'nav.main': '主导航', 'land.web': '打开网页版', 'land.board': '多个模型汇聚到你的一个 Key', 'land.yourKey': '你的一个 Key',
     'land.dev.t': '现有代码，\n改两行就能用', 'land.dev.p': '把 Base URL 换成星枢的地址，填上你的 Key。OpenAI SDK、Anthropic SDK 和常见客户端都不用改别的。',
-    'land.dev.keys': '管理我的 Key', 'land.dev.hello': '你好', 'land.apps': '在哪都能用',
+    'land.dev.keys': '管理我的 Key', 'land.dev.hello': '你好', 'land.apps': '在哪都能用', 'land.noInstall': '不想安装？',
     'land.app.apk': '下载 APK 安装包', 'land.app.exe': '下载安装程序', 'land.app.dmg': 'Intel 与 Apple 芯片通用',
 
     'auth.login': '登录', 'auth.register': '注册', 'auth.username': '用户名', 'auth.password': '密码',
@@ -97,7 +97,7 @@
     'land.prices': '部分模型價格', 'land.allPrices': '查看全部模型價格',
     'nav.main': '主導覽', 'land.web': '開啟網頁版', 'land.board': '多個模型匯聚到你的一個 Key', 'land.yourKey': '你的一個 Key',
     'land.dev.t': '現有程式碼，\n改兩行就能用', 'land.dev.p': '把 Base URL 換成星樞的位址，填上你的 Key。OpenAI SDK、Anthropic SDK 和常見客戶端都不用改別的。',
-    'land.dev.keys': '管理我的 Key', 'land.dev.hello': '你好', 'land.apps': '在哪都能用',
+    'land.dev.keys': '管理我的 Key', 'land.dev.hello': '你好', 'land.apps': '在哪都能用', 'land.noInstall': '不想安裝？',
     'land.app.apk': '下載 APK 安裝檔', 'land.app.exe': '下載安裝程式', 'land.app.dmg': 'Intel 與 Apple 晶片通用',
 
     'auth.login': '登入', 'auth.register': '註冊', 'auth.username': '使用者名稱', 'auth.password': '密碼',
@@ -181,7 +181,7 @@
     'land.prices': 'Selected model prices', 'land.allPrices': 'See all model prices',
     'nav.main': 'Main', 'land.web': 'Open web app', 'land.board': 'Many models flowing into one key', 'land.yourKey': 'Your one key',
     'land.dev.t': 'Keep your code.\nChange two lines.', 'land.dev.p': 'Point the base URL at us and use your key. The OpenAI SDK, the Anthropic SDK and most clients need nothing else.',
-    'land.dev.keys': 'Manage my keys', 'land.dev.hello': 'Hello', 'land.apps': 'Use it anywhere',
+    'land.dev.keys': 'Manage my keys', 'land.dev.hello': 'Hello', 'land.apps': 'Use it anywhere', 'land.noInstall': 'Rather not install anything? ',
     'land.app.apk': 'APK installer', 'land.app.exe': 'Windows installer', 'land.app.dmg': 'Intel and Apple silicon',
 
     'auth.login': 'Sign in', 'auth.register': 'Create account', 'auth.username': 'Username', 'auth.password': 'Password',
