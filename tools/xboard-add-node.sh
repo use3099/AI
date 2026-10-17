@@ -52,9 +52,10 @@ echo
 echo "节点「$NAME」已就绪，节点 ID：$ID"
 case "$LIM" in
   set) echo "限速：${LIMIT} Mbps" ;;
-  nofield) echo "限速：这个 Xboard 版本的节点没有限速项，需要在套餐里设置" ;;
+  nofield) echo "限速：${LIMIT} Mbps（在新服务器上限速，只影响这一台）" ;;
   existing) echo "（之前已经建过同名节点，沿用它）" ;;
 esac
 echo
-echo "======== 复制下面这一整行，到新服务器（$HOST）上用 root 运行 ========"
-echo "docker rm -f xboard-node 2>/dev/null; docker run -d --name xboard-node --restart always --network host -e apiHost=$API_HOST -e apiKey='$API_KEY' -e nodeID=$ID -e kernel=$KERNEL ghcr.io/cedar2025/xboard-node:latest -c /etc/xboard-node/config.yml && sleep 8 && docker logs xboard-node --tail 20"
+EXTRA=""; [ "$LIMIT" != "0" ] && EXTRA="、每用户限速 ${LIMIT} Mbps"
+echo "======== 复制下面这一整行，到新服务器（$HOST）上用 root 运行（自动装 Docker、启动节点${EXTRA}） ========"
+echo "curl -fsSL https://raw.githubusercontent.com/use3099/AI/main/tools/node-install.sh | bash -s -- $API_HOST '$API_KEY' $ID $KERNEL $LIMIT"
