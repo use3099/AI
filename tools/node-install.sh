@@ -9,9 +9,15 @@ KERNEL="${4:-xray}"; LIMIT="${5:-0}"
 case "$NODE_ID" in ''|*[!0-9]*) echo "节点ID 必须是数字"; exit 1;; esac
 
 if ! command -v docker >/dev/null; then
-  echo "== 安装 Docker（约 1 分钟）"
-  curl -fsSL https://get.docker.com | sh >/dev/null 2>&1
+  echo "== 安装 Docker（约 1～2 分钟）"
+  if ! curl -fsSL -m 60 https://get.docker.com -o /root/get-docker.sh; then
+    echo "连不上 get.docker.com，改用系统软件源安装"
+    apt-get -qq update >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get -y -qq install docker.io >/dev/null
+  else
+    sh /root/get-docker.sh >/dev/null 2>&1
+  fi
   systemctl enable --now docker >/dev/null 2>&1 || true
+  command -v docker >/dev/null || { echo "Docker 安装失败，这台服务器可能连不上外网（检查安全组的出站规则）"; exit 1; }
 fi
 
 echo "== 启动节点 #$NODE_ID"
@@ -35,7 +41,12 @@ USERS="$(docker logs xboard-node 2>&1 | sed -n 's/.*started, \([0-9]*\) users.*/
 echo "节点已启动：端口 $PORT，${USERS:-?} 个用户"
 
 if [ "$LIMIT" != "0" ]; then
-  curl -fsSL https://raw.githubusercontent.com/use3099/AI/main/tools/node-speed-limit.sh | bash -s -- "$LIMIT" "$PORT"
+  for u in https://raw.githubusercontent.com/use3099/AI/main/tools/node-speed-limit.sh \
+           https://cdn.jsdelivr.net/gh/use3099/AI@main/tools/node-speed-limit.sh; do
+    curl -fsSL -m 30 "$u" -o /root/node-speed-limit.sh && break
+  done
+  [ -s /root/node-speed-limit.sh ] || { echo "下载限速脚本失败（连不上 GitHub）"; exit 1; }
+  bash /root/node-speed-limit.sh "$LIMIT" "$PORT"
 fi
 
 echo
