@@ -1,4 +1,4 @@
-# 星枢 API（基于 new-api 的 AI 中转站）
+# 星枢 API（AI 中转站：new-api 网站 + sub2api 内网网关 + App 后端）
 
 后端直接用开源的 [new-api](https://github.com/QuantumNous/new-api) 管账户、计费、充值和转发；这个仓库提供：
 
@@ -6,7 +6,8 @@
 | --- | --- |
 | `web/` | 给用户用的网页前台：首页、注册登录、总览、API 密钥、充值（支付宝/微信，走易支付）、账单、模型价格、邀请、签到。简体 / 繁體 / English，深浅色，手机电脑都适配。纯静态文件，不用编译。 |
 | `deploy/` | 一键部署：new-api + PostgreSQL + Redis + Caddy（自动 HTTPS）。 |
-| `app/` | App 外壳：Android、iOS（Capacitor），Windows、macOS（Electron）。App 里直接打开你的网站，所以**网站一更新，所有 App 立刻同步**，不用重新发版。 |
+| `bff/` | App 后端：注册登录、充值、对话转发，App 只和它通信；sub2api 只在内网。也包含 App 的聊天界面（`bff/public/`）。 |
+| `app/` | App 外壳：Android、iOS（Capacitor），Windows、macOS（Electron）。App 打开 `https://主域名/app/`（BFF 提供的界面），所以**界面一更新，所有 App 立刻同步**，不用重新发版。 |
 | `.github/workflows/` | 在 GitHub 上自动打包 4 个平台的安装包。 |
 
 ## 一、部署网站（服务器上操作）
@@ -26,6 +27,55 @@
    - **运营设置 → 额度显示** 可以选按美元或人民币显示
 
 以后改了网页，重新生成 `install.sh` 后在服务器上运行 `bash install.sh update`，数据和 `config.js` 都会保留。
+
+## 一·五、App 后端（BFF）+ sub2api
+
+App 不再直接打开网站，而是打开 `https://主域名/app/`，这个页面和接口都由 `bff/` 提供：
+
+```
+App ──> BFF（/app/，注册登录、充值、对话）──> sub2api（只在内网）──> 上游 AI
+```
+
+- **sub2api 不对外开放**：Caddy 不转发它，外网访问不到它的后台和登录页。它只在 Docker 内网里，后台端口只绑本机 `127.0.0.1:8080`。
+- 客户注册时，BFF 用 sub2api 的 Admin API Key 自动给他开一个 sub2api 用户和 API Key。**Key 加密存在服务器上，永远不发给 App**。
+- 充值走易支付：付款回调 → BFF 校验签名和金额 → 调 sub2api 给这个用户加余额（订单号做幂等键，重复回调不会重复加钱）。
+- 客户在 App 里只能：登录、聊天、看余额、充值、看使用记录。
+
+### 管理 sub2api（只有你自己能进）
+
+在你自己的电脑上：
+```bash
+ssh -L 8080:127.0.0.1:8080 root@服务器IP
+```
+然后浏览器打开 `http://127.0.0.1:8080`，账号是 `.env` 里的 `SUB2API_ADMIN_EMAIL` / `SUB2API_ADMIN_PASSWORD`。
+
+在 sub2api 后台：
+1. 添加上游账号（你中转站里开的 API Key / 订阅账号）
+2. 建分组，把账号放进去，设好倍率，记下**分组 ID**
+3. **系统设置里不要开启登录验证码、不要开启后台模式**（BFF 要用接口给客户建 Key）
+
+### 服务器上的配置（`/opt/ai-relay/.env`）
+
+| 变量 | 说明 |
+| --- | --- |
+| `SUB2API_ADMIN_KEY` | 安装脚本会自动生成；失败时去 sub2api 后台 → 系统设置 → Admin API Key 手动生成填进来 |
+| `SUB2API_GROUP_ID` | 客户的 Key 放进哪个分组（**要在客户注册之前填好**） |
+| `SIGNUP_BALANCE_USD` | 新用户赠送额度（美元），默认 0 |
+| `EPAY_URL` / `EPAY_PID` / `EPAY_KEY` | 易支付接口地址、商户 ID、密钥；不填则 App 里充值关闭 |
+| `CNY_PER_USD` | 充值汇率：多少人民币换 1 美元额度，默认 7.2 |
+| `RECHARGE_AMOUNTS` | 充值档位，默认 `10,30,50,100,200` |
+| `ALLOWED_MODELS` | 只给客户显示这些模型（逗号分隔），留空 = 分组里有什么给什么 |
+
+改完运行 `cd /opt/ai-relay && docker compose up -d bff`。
+
+易支付后台的**回调地址**不用配，BFF 下单时自动带上 `https://主域名/app/pay/notify`。
+
+### 本地测试 BFF
+
+```bash
+cd bff && node test/smoke.js          # 用模拟的 sub2api 跑完注册、充值回调、对话流式转发
+SERVE=18555 node test/smoke.js        # 只启动，浏览器打开 http://127.0.0.1:18555/app/ 看界面
+```
 
 ## 二、改品牌
 

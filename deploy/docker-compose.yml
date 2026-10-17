@@ -52,6 +52,74 @@ services:
       - ./data/postgres:/var/lib/postgresql/data
     networks: [relay]
 
+  # ───────── sub2api：AI 网关引擎，只在内网 ─────────
+  # 不对外开放任何端口；后台只绑本机 127.0.0.1:8080，管理员用 SSH 隧道访问：
+  #   ssh -L 8080:127.0.0.1:8080 root@服务器IP   然后浏览器打开 http://127.0.0.1:8080
+  sub2api:
+    image: weishaw/sub2api:latest
+    container_name: sub2api
+    restart: always
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${SUB2API_ADMIN_PORT:-8080}:8080"
+    volumes:
+      - sub2api_data:/app/data     # 命名卷（镜像内非 root 用户可写）
+    environment:
+      - AUTO_SETUP=true
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - SERVER_MODE=release
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=newapi
+      - DATABASE_PASSWORD=${DB_PASSWORD}
+      - DATABASE_DBNAME=sub2api
+      - DATABASE_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_DB=1
+      - ADMIN_EMAIL=${SUB2API_ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${SUB2API_ADMIN_PASSWORD}
+      - JWT_SECRET=${SUB2API_JWT_SECRET}
+      - TOTP_ENCRYPTION_KEY=${SUB2API_TOTP_KEY}
+      - TZ=${TZ:-Asia/Shanghai}
+    depends_on:
+      - postgres
+      - redis
+    networks: [relay]
+
+  # ───────── BFF：App 唯一能访问的后端 ─────────
+  bff:
+    build: ./bff
+    image: xingshu-bff:local
+    container_name: xingshu-bff
+    restart: always
+    volumes:
+      - ./data/bff:/srv/bff/data
+    environment:
+      - PORT=8787
+      - BASE_PATH=/app
+      - PUBLIC_URL=https://${DOMAIN}
+      - BFF_JWT_SECRET=${BFF_JWT_SECRET}
+      - BFF_DATA_SECRET=${BFF_DATA_SECRET}
+      - SUB2API_URL=http://sub2api:8080
+      - SUB2API_ADMIN_KEY=${SUB2API_ADMIN_KEY:-not-set}
+      - SUB2API_GROUP_ID=${SUB2API_GROUP_ID:-}
+      - SIGNUP_BALANCE_USD=${SIGNUP_BALANCE_USD:-0}
+      - EPAY_URL=${EPAY_URL:-}
+      - EPAY_PID=${EPAY_PID:-}
+      - EPAY_KEY=${EPAY_KEY:-}
+      - EPAY_METHODS=${EPAY_METHODS:-alipay,wxpay}
+      - CNY_PER_USD=${CNY_PER_USD:-7.2}
+      - RECHARGE_AMOUNTS=${RECHARGE_AMOUNTS:-10,30,50,100,200}
+      - ALLOWED_MODELS=${ALLOWED_MODELS:-}
+      - TZ=${TZ:-Asia/Shanghai}
+    depends_on:
+      - sub2api
+    networks: [relay]
+
   # Caddy：自动申请 HTTPS 证书；主域名 = 用户前台，admin 子域名 = new-api 自带管理后台
   caddy:
     image: caddy:2-alpine
@@ -70,8 +138,12 @@ services:
       - ./data/caddy:/data
     depends_on:
       - new-api
+      - bff
     networks: [relay]
 
 networks:
   relay:
     driver: bridge
+
+volumes:
+  sub2api_data:

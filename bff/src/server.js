@@ -1,0 +1,451 @@
+// 星枢 API · App 后端（BFF）
+// App 只和这里通信；sub2api 在内网，客户永远看不到它，也拿不到真实的 API Key。
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const config = require('./config');
+const db = require('./db');
+const s2 = require('./sub2api');
+const epay = require('./epay');
+const { hashPassword, verifyPassword, signJwt, verifyJwt, encrypt, decrypt, randomString } = require('./crypto');
+
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+// ───────── 小工具 ─────────
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+function send(res, status, data, headers = {}) {
+  if (res.headersSent) return;
+  const body = typeof data === 'string' ? data : JSON.stringify(data);
+  res.writeHead(status, {
+    'content-type': typeof data === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    ...headers,
+  });
+  res.end(body);
+}
+
+function readBody(req, limit = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new HttpError(413, '请求内容太大')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+async function readJson(req, limit) {
+  const text = await readBody(req, limit);
+  if (!text) return {};
+  try { return JSON.parse(text); } catch { throw new HttpError(400, '请求格式错误'); }
+}
+
+function clientIp(req) {
+  if (config.trustProxy) {
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) return String(xff).split(',')[0].trim();
+  }
+  return req.socket.remoteAddress || '';
+}
+
+// 固定窗口限流（单进程内存，够用）
+const buckets = new Map();
+function rateLimit(key, max, windowMs) {
+  const now = Date.now();
+  let b = buckets.get(key);
+  if (!b || b.reset < now) { b = { count: 0, reset: now + windowMs }; buckets.set(key, b); }
+  b.count++;
+  if (b.count > max) throw new HttpError(429, '操作太频繁，请稍后再试');
+}
+setInterval(() => { const now = Date.now(); for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k); }, 60000).unref();
+
+// 去掉上游报错里可能出现的内部信息，避免客户看到后端实现
+function cleanMessage(msg) {
+  return String(msg || '').replace(/sub2api/gi, '服务').replace(/https?:\/\/[^\s"']+/g, '').slice(0, 300);
+}
+
+const money = n => (Math.round(n * 100) / 100).toFixed(2);
+
+// ───────── 账号 ─────────
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^\+?\d{6,15}$/;
+
+function normalizeAccount(raw) {
+  const a = String(raw || '').trim().toLowerCase().replace(/[\s-]/g, '');
+  if (EMAIL_RE.test(a) && a.length <= 120) return a;
+  if (PHONE_RE.test(a)) return a;
+  throw new HttpError(400, '请输入正确的邮箱或手机号');
+}
+
+function auth(req) {
+  const h = req.headers.authorization || '';
+  const token = h.startsWith('Bearer ') ? h.slice(7) : '';
+  const p = verifyJwt(token);
+  if (!p) throw new HttpError(401, '请先登录');
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(p.uid);
+  if (!user || user.token_ver !== p.tv) throw new HttpError(401, '登录已失效，请重新登录');
+  if (user.status !== 'active') throw new HttpError(403, '账号已被停用，请联系客服');
+  return user;
+}
+
+const issueToken = u => signJwt({ uid: u.id, tv: u.token_ver });
+const publicUser = u => ({ id: u.id, account: u.account, created_at: u.created_at });
+
+// 给 App 账号在 sub2api 里开一个对应用户 + API Key（只存服务器，不给客户端）
+async function provision(user) {
+  if (user.s2_user_id && user.s2_key_enc) return user;
+  const password = randomString(32);
+  let s2UserId = user.s2_user_id;
+  let s2Email = user.s2_email;
+  if (!s2UserId) {
+    s2Email = `xs${user.id}-${randomString(6).toLowerCase()}@bff.invalid`;
+    const created = await s2.createUser({
+      email: s2Email,
+      password,
+      username: `xs${user.id}`,
+      notes: `星枢 App 用户 #${user.id}`,
+    });
+    s2UserId = created.id;
+  } else {
+    // 用户已建但 key 没建成：重置密码后再登录建 key
+    await s2.setPassword(s2UserId, password);
+  }
+  db.prepare('UPDATE users SET s2_user_id = ?, s2_email = ? WHERE id = ?').run(s2UserId, s2Email, user.id);
+  const jwt = await s2.login(s2Email, password);
+  const key = await s2.createKey(jwt, 'app');
+  db.prepare('UPDATE users SET s2_key_enc = ? WHERE id = ?').run(encrypt(key), user.id);
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+}
+
+function userKey(user) {
+  if (!user.s2_key_enc) throw new HttpError(503, '账号还在初始化，请稍后重试');
+  return decrypt(user.s2_key_enc);
+}
+
+// ───────── 充值到账（支付成功 → 给 sub2api 加余额） ─────────
+async function creditOrder(no) {
+  const order = db.prepare('SELECT * FROM orders WHERE no = ?').get(no);
+  if (!order || order.status !== 'paid') return;
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(order.user_id);
+  try {
+    if (!user || !user.s2_user_id) throw new Error('用户未开通');
+    await s2.addBalance(user.s2_user_id, order.credit_usd, `App 充值 ¥${order.amount_cny} 订单 ${order.no}`, `bff-order-${order.no}`);
+    db.prepare("UPDATE orders SET status = 'credited', credited_at = ?, last_error = NULL WHERE no = ? AND status = 'paid'").run(Date.now(), no);
+    log('充值到账', no, `user=${order.user_id}`, `+$${order.credit_usd}`);
+  } catch (e) {
+    db.prepare('UPDATE orders SET last_error = ? WHERE no = ?').run(String(e.message).slice(0, 500), no);
+    log('充值到账失败，稍后重试', no, e.message);
+  }
+}
+
+// 每分钟重试一次 12 小时内付款但还没到账的订单（Idempotency-Key 保证不会重复加钱）
+setInterval(() => {
+  const rows = db.prepare("SELECT no FROM orders WHERE status = 'paid' AND paid_at > ?").all(Date.now() - 12 * 3600 * 1000);
+  for (const r of rows) creditOrder(r.no);
+}, 60000).unref();
+
+// ───────── 路由 ─────────
+const routes = [];
+const route = (method, pattern, handler) => routes.push({ method, pattern, handler });
+
+route('GET', '/api/health', async () => ({ ok: true }));
+
+route('GET', '/api/config', async () => ({
+  recharge: {
+    enabled: config.epay.enabled,
+    methods: config.epay.methods,
+    amounts: config.rechargeAmounts,
+    min: config.rechargeMin,
+    max: config.rechargeMax,
+    cny_per_usd: config.cnyPerUsd,
+  },
+}));
+
+route('POST', '/api/auth/register', async (req) => {
+  rateLimit('reg:' + clientIp(req), 5, 3600 * 1000);
+  const body = await readJson(req);
+  const account = normalizeAccount(body.account);
+  const password = String(body.password || '');
+  if (password.length < 8 || password.length > 128) throw new HttpError(400, '密码至少 8 位');
+  if (db.prepare('SELECT 1 FROM users WHERE account = ?').get(account)) throw new HttpError(409, '该账号已注册，请直接登录');
+
+  const info = db.prepare('INSERT INTO users (account, pass_hash, created_at) VALUES (?, ?, ?)')
+    .run(account, hashPassword(password), Date.now());
+  let user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+  try {
+    user = await provision(user);
+  } catch (e) {
+    log('开通失败', account, e.message);
+    // 回滚：本地账号删掉，sub2api 里建了一半的用户也删掉
+    const half = db.prepare('SELECT s2_user_id FROM users WHERE id = ?').get(user.id);
+    if (half && half.s2_user_id) s2.deleteUser(half.s2_user_id).catch(() => {});
+    db.prepare('DELETE FROM users WHERE id = ?').run(user.id);
+    throw new HttpError(503, '注册失败，服务暂时不可用，请稍后再试');
+  }
+  log('新用户', account, `id=${user.id}`);
+  return { token: issueToken(user), user: publicUser(user) };
+});
+
+route('POST', '/api/auth/login', async (req) => {
+  const ip = clientIp(req);
+  rateLimit('login:' + ip, 20, 10 * 60 * 1000);
+  const body = await readJson(req);
+  const account = normalizeAccount(body.account);
+  rateLimit('login-acct:' + account, 10, 10 * 60 * 1000);
+  let user = db.prepare('SELECT * FROM users WHERE account = ?').get(account);
+  if (!user || !verifyPassword(String(body.password || ''), user.pass_hash)) throw new HttpError(401, '账号或密码错误');
+  if (user.status !== 'active') throw new HttpError(403, '账号已被停用，请联系客服');
+  if (!user.s2_key_enc) {
+    try { user = await provision(user); } catch (e) { log('补开通失败', account, e.message); }
+  }
+  return { token: issueToken(user), user: publicUser(user) };
+});
+
+route('POST', '/api/auth/password', async (req) => {
+  const user = auth(req);
+  const body = await readJson(req);
+  if (!verifyPassword(String(body.old_password || ''), user.pass_hash)) throw new HttpError(400, '原密码不正确');
+  const np = String(body.new_password || '');
+  if (np.length < 8 || np.length > 128) throw new HttpError(400, '新密码至少 8 位');
+  db.prepare('UPDATE users SET pass_hash = ?, token_ver = token_ver + 1 WHERE id = ?').run(hashPassword(np), user.id);
+  const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  return { token: issueToken(fresh) };
+});
+
+route('POST', '/api/auth/logout-all', async (req) => {
+  const user = auth(req);
+  db.prepare('UPDATE users SET token_ver = token_ver + 1 WHERE id = ?').run(user.id);
+  return { ok: true };
+});
+
+route('GET', '/api/me', async (req) => {
+  const user = auth(req);
+  let balance = null;
+  if (user.s2_user_id) {
+    try { balance = Number((await s2.getUser(user.s2_user_id)).balance); } catch (e) { log('查余额失败', e.message); }
+  }
+  return { user: publicUser(user), balance_usd: balance, cny_per_usd: config.cnyPerUsd };
+});
+
+let modelsCache = { at: 0, list: [] };
+route('GET', '/api/models', async (req) => {
+  const user = auth(req);
+  if (Date.now() - modelsCache.at < 5 * 60 * 1000 && modelsCache.list.length) return { models: modelsCache.list };
+  const r = await s2.gateway('GET', '/models', userKey(user), undefined, AbortSignal.timeout(15000));
+  if (!r.ok) throw new HttpError(502, '获取模型列表失败');
+  const j = await r.json();
+  let ids = (j.data || []).map(m => m.id).filter(Boolean);
+  if (config.allowedModels.length) ids = ids.filter(id => config.allowedModels.includes(id));
+  ids = [...new Set(ids)].sort();
+  modelsCache = { at: Date.now(), list: ids };
+  return { models: ids };
+});
+
+const CHAT_FIELDS = ['model', 'messages', 'temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'reasoning_effort'];
+
+route('POST', '/api/chat', async (req, res) => {
+  const user = auth(req);
+  rateLimit('chat:' + user.id, config.chatPerMinute, 60 * 1000);
+  const raw = await readJson(req, 4 * 1024 * 1024);
+  const body = {};
+  for (const k of CHAT_FIELDS) if (raw[k] !== undefined) body[k] = raw[k];
+  if (typeof body.model !== 'string' || !body.model) throw new HttpError(400, '请选择模型');
+  if (config.allowedModels.length && !config.allowedModels.includes(body.model)) throw new HttpError(400, '该模型暂不可用');
+  if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 400) throw new HttpError(400, '消息格式错误');
+  for (const m of body.messages) {
+    if (!m || !['system', 'user', 'assistant'].includes(m.role)) throw new HttpError(400, '消息格式错误');
+  }
+  if (body.stream === undefined) body.stream = true;
+  if (body.stream) body.stream_options = { include_usage: true };
+
+  const ctrl = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) ctrl.abort(); });
+
+  let upstream;
+  try {
+    upstream = await s2.gateway('POST', '/chat/completions', userKey(user), body, ctrl.signal);
+  } catch (e) {
+    if (ctrl.signal.aborted) return;
+    log('chat 上游连接失败', e.message);
+    throw new HttpError(502, '服务暂时不可用，请稍后再试');
+  }
+
+  if (!upstream.ok) {
+    const text = await upstream.text().catch(() => '');
+    let msg = '';
+    try { const j = JSON.parse(text); msg = j.error?.message || j.message || ''; } catch { msg = text; }
+    // sub2api 余额不足：403 INSUFFICIENT_BALANCE "Insufficient account balance"（middleware/api_key_auth.go）
+    if (upstream.status === 402 || /insufficient|余额不足/i.test(msg + ' ' + text)) {
+      throw new HttpError(402, '余额不足，请先充值');
+    }
+    log('chat 上游错误', upstream.status, msg.slice(0, 200));
+    throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, cleanMessage(msg) || '请求失败');
+  }
+
+  res.writeHead(200, {
+    'content-type': upstream.headers.get('content-type') || (body.stream ? 'text/event-stream' : 'application/json'),
+    'cache-control': 'no-cache, no-transform',
+    'x-accel-buffering': 'no',
+    connection: 'keep-alive',
+  });
+  try {
+    for await (const chunk of upstream.body) {
+      if (!res.write(chunk)) await new Promise(r => res.once('drain', r));
+    }
+  } catch (e) {
+    if (!ctrl.signal.aborted) log('chat 流中断', e.message);
+  }
+  res.end();
+  return undefined; // 已自行响应
+}, { raw: true });
+
+route('GET', '/api/usage', async (req, res, url) => {
+  const user = auth(req);
+  if (!user.s2_user_id) return { items: [], total: 0 };
+  const page = Math.max(1, Math.min(500, parseInt(url.searchParams.get('page'), 10) || 1));
+  const data = await s2.listUsage(user.s2_user_id, page, 20);
+  const items = (data.items || []).map(i => ({
+    time: i.created_at,
+    model: i.model,
+    input_tokens: i.input_tokens,
+    output_tokens: i.output_tokens,
+    cost_usd: Number(i.actual_cost ?? i.total_cost ?? 0),
+  }));
+  return { items, total: data.total || 0, page, pages: data.pages || 1 };
+});
+
+// 充值
+route('POST', '/api/recharge', async (req) => {
+  const user = auth(req);
+  if (!config.epay.enabled) throw new HttpError(503, '充值暂未开放');
+  rateLimit('order:' + user.id, 10, 10 * 60 * 1000);
+  const body = await readJson(req);
+  const amount = Number(body.amount);
+  if (!Number.isFinite(amount) || amount < config.rechargeMin || amount > config.rechargeMax) {
+    throw new HttpError(400, `充值金额需在 ¥${config.rechargeMin} - ¥${config.rechargeMax} 之间`);
+  }
+  const method = String(body.method || '');
+  if (!config.epay.methods.includes(method)) throw new HttpError(400, '不支持的支付方式');
+  const amountStr = money(amount);
+  const credit = Math.round((Number(amountStr) / config.cnyPerUsd) * 1e6) / 1e6;
+  const no = `XS${Date.now()}${crypto.randomInt(1000, 9999)}`;
+  db.prepare('INSERT INTO orders (no, user_id, amount_cny, credit_usd, method, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(no, user.id, amountStr, credit, method, Date.now());
+  return {
+    order_no: no,
+    amount_cny: amountStr,
+    credit_usd: credit,
+    pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API 充值 ¥${amountStr}` }),
+  };
+});
+
+route('GET', '/api/recharge/orders', async (req) => {
+  const user = auth(req);
+  const rows = db.prepare('SELECT no, amount_cny, credit_usd, method, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id);
+  return { items: rows };
+});
+
+route('GET', /^\/api\/recharge\/(XS\d+)$/, async (req, res, url, m) => {
+  const user = auth(req);
+  const o = db.prepare('SELECT no, amount_cny, credit_usd, method, status, created_at FROM orders WHERE no = ? AND user_id = ?').get(m[1], user.id);
+  if (!o) throw new HttpError(404, '订单不存在');
+  return o;
+});
+
+// 易支付异步通知（GET 或 POST 都可能）
+async function payNotify(req, res, url) {
+  const params = Object.fromEntries(url.searchParams);
+  if (req.method === 'POST') {
+    const text = await readBody(req, 64 * 1024);
+    for (const [k, v] of new URLSearchParams(text)) params[k] = v;
+  }
+  if (!config.epay.enabled || !epay.verify(params) || String(params.pid) !== String(config.epay.pid)) {
+    log('支付回调验签失败', params.out_trade_no);
+    return send(res, 400, 'fail');
+  }
+  const order = db.prepare('SELECT * FROM orders WHERE no = ?').get(params.out_trade_no);
+  if (!order) return send(res, 404, 'fail');
+  if (params.trade_status !== 'TRADE_SUCCESS') return send(res, 200, 'success');
+  if (money(Number(params.money)) !== order.amount_cny) {
+    log('支付金额不符', order.no, params.money, order.amount_cny);
+    return send(res, 400, 'fail');
+  }
+  const r = db.prepare("UPDATE orders SET status = 'paid', trade_no = ?, paid_at = ? WHERE no = ? AND status = 'pending'")
+    .run(String(params.trade_no || ''), Date.now(), order.no);
+  if (r.changes === 1) await creditOrder(order.no);
+  return send(res, 200, 'success');
+}
+route('GET', '/pay/notify', payNotify, { raw: true });
+route('POST', '/pay/notify', payNotify, { raw: true });
+
+route('GET', '/pay/return', async (req, res) => {
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>支付完成</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;background:#f4f5f8;color:#1c2333}div{text-align:center;padding:24px}h1{font-size:20px}p{color:#667}</style></head>
+<body><div><h1>支付已提交</h1><p>请返回「星枢 API」App，余额会在几秒内到账。</p></div></body></html>`;
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(html);
+}, { raw: true });
+
+// ───────── 静态页面（App 界面） ─────────
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
+function serveStatic(req, res, p) {
+  let rel = decodeURIComponent(p).replace(/^\/+/, '') || 'index.html';
+  const file = path.normalize(path.join(PUBLIC_DIR, rel));
+  if (!file.startsWith(PUBLIC_DIR + path.sep)) return send(res, 404, 'not found');
+  let target = file;
+  if (!fs.existsSync(target) || fs.statSync(target).isDirectory()) target = path.join(PUBLIC_DIR, 'index.html');
+  const ext = path.extname(target);
+  res.writeHead(200, {
+    'content-type': MIME[ext] || 'application/octet-stream',
+    'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+    'content-security-policy': CSP,
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+  });
+  fs.createReadStream(target).pipe(res);
+}
+
+// ───────── HTTP 服务 ─────────
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, 'http://localhost');
+  let p = url.pathname;
+  if (config.basePath) {
+    if (p === config.basePath) { res.writeHead(301, { location: config.basePath + '/' }); return res.end(); }
+    if (!p.startsWith(config.basePath + '/')) return send(res, 404, { error: 'not found' });
+    p = p.slice(config.basePath.length);
+  }
+  try {
+    for (const r of routes) {
+      if (r.method !== req.method) continue;
+      const m = typeof r.pattern === 'string' ? (r.pattern === p ? [p] : null) : p.match(r.pattern);
+      if (!m) continue;
+      const out = await r.handler(req, res, url, m);
+      if (out !== undefined) send(res, 200, out);
+      return;
+    }
+    if (p.startsWith('/api/') || p.startsWith('/pay/')) return send(res, 404, { error: '接口不存在' });
+    if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, { error: 'method not allowed' });
+    return serveStatic(req, res, p);
+  } catch (e) {
+    if (e instanceof HttpError) return send(res, e.status, { error: e.message });
+    log('内部错误', req.method, p, e.stack || e.message);
+    return send(res, 500, { error: '服务器开小差了，请稍后再试' });
+  }
+});
+
+server.requestTimeout = 0;          // 长对话流式输出不超时
+server.headersTimeout = 30000;
+server.listen(config.port, () => log(`BFF 已启动 :${config.port}${config.basePath}/  → sub2api ${config.sub2api.url}`));
+
+module.exports = server;

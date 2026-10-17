@@ -1,0 +1,12 @@
+{
+  "name": "xingshu-bff",
+  "version": "1.0.0",
+  "private": true,
+  "description": "星枢 API App 后端：账号、充值、对话转发；sub2api 只在内网",
+  "main": "src/server.js",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/smoke.js"
+  }
+}

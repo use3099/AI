@@ -12,13 +12,16 @@ const appName = process.env.APP_NAME || '星枢 API';
 const appId = process.env.APP_ID || 'com.xingshu.api';
 const version = process.env.APP_VERSION || '1.0.0';
 const host = new URL(siteUrl).host;
+// App 打开的是 BFF 提供的 App 界面（只对接 BFF，不对接 sub2api / new-api）
+const appPath = '/' + (process.env.APP_PATH || 'app/').replace(/^\/+/, '');
+const appUrl = siteUrl + appPath;
 
 const cap = {
   appId,
   appName,
   webDir: 'www',
   server: {
-    url: siteUrl,
+    url: appUrl,
     hostname: host,
     androidScheme: 'https',
     errorPath: 'offline.html',
@@ -32,7 +35,7 @@ const cap = {
   }
 };
 fs.writeFileSync(path.join(root, 'capacitor.config.json'), JSON.stringify(cap, null, 2));
-fs.writeFileSync(path.join(root, 'site.json'), JSON.stringify({ siteUrl, appName }, null, 2));
+fs.writeFileSync(path.join(root, 'site.json'), JSON.stringify({ siteUrl: appUrl, appName }, null, 2));
 
 const pkgPath = path.join(root, 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
@@ -44,5 +47,5 @@ fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
 
 // 离线页里写入网站地址，方便“重试”
 const offline = path.join(root, 'www', 'offline.html');
-fs.writeFileSync(offline, fs.readFileSync(offline, 'utf8').replace(/__SITE_URL__/g, siteUrl).replace(/__APP_NAME__/g, appName));
-console.log(`配置完成：${appName} (${appId}) v${version} → ${siteUrl}`);
+fs.writeFileSync(offline, fs.readFileSync(offline, 'utf8').replace(/__SITE_URL__/g, appUrl).replace(/__APP_NAME__/g, appName));
+console.log(`配置完成：${appName} (${appId}) v${version} → ${appUrl}`);

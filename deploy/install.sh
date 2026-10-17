@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI 中转站一键部署脚本（new-api 后端 + 用户前台 + 自动 HTTPS）
+# AI 中转站一键部署脚本（new-api 后端 + 用户前台 + sub2api 内网网关 + App 后端 BFF + 自动 HTTPS）
 # 用法：  bash install.sh            首次安装
 #         bash install.sh update     只更新前台网页 / 拉取最新 new-api 镜像，数据不动
 set -euo pipefail
@@ -31,6 +31,90 @@ ensure_docker() {
 
 # 生成随机密码（不用管道，避免 pipefail 下 SIGPIPE 导致脚本静默退出）
 rand() { local s; s=$(LC_ALL=C tr -dc 'A-Za-z0-9' < <(head -c 2048 /dev/urandom)); printf '%s' "${s:0:${1:-32}}"; }
+hexrand() { od -An -tx1 -N"${1:-32}" /dev/urandom | tr -d ' \n'; }
+
+# .env 里没有这一项才写入（已有的密钥绝不覆盖，否则已保存的数据会解不开）
+setenv() { grep -q "^$1=" "$APP_DIR/.env" 2>/dev/null || echo "$1=$2" >>"$APP_DIR/.env"; }
+
+# sub2api（内网 AI 网关）+ BFF（App 后端）：首次安装和 update 都会走这里
+ensure_app_stack() {
+  cd "$APP_DIR"
+  setenv SUB2API_ADMIN_EMAIL "admin@xingshu.local"
+  setenv SUB2API_ADMIN_PASSWORD "$(rand 24)"
+  setenv SUB2API_JWT_SECRET "$(rand 48)"
+  setenv SUB2API_TOTP_KEY "$(hexrand 32)"
+  setenv SUB2API_ADMIN_KEY ""
+  setenv SUB2API_GROUP_ID ""
+  setenv BFF_JWT_SECRET "$(rand 48)"
+  setenv BFF_DATA_SECRET "$(rand 48)"
+  setenv SIGNUP_BALANCE_USD "0"
+  setenv CNY_PER_USD "7.2"
+  setenv EPAY_URL ""
+  setenv EPAY_PID ""
+  setenv EPAY_KEY ""
+  chmod 600 .env
+  mkdir -p data/bff && chown -R 1000:1000 data/bff   # BFF 容器以 node(1000) 用户运行
+
+  docker compose up -d postgres redis
+  for _ in $(seq 1 40); do docker compose exec -T postgres pg_isready -U newapi >/dev/null 2>&1 && break; sleep 2; done
+  if ! docker compose exec -T postgres psql -U newapi -d newapi -tAc "SELECT 1 FROM pg_database WHERE datname='sub2api'" | grep -q 1; then
+    say "创建 sub2api 数据库…"
+    docker compose exec -T postgres createdb -U newapi sub2api
+  fi
+
+  say "构建并启动全部服务（第一次要下载镜像，约 2-5 分钟）…"
+  docker compose up -d --build --remove-orphans
+
+  # 自动生成 sub2api 的 Admin API Key，写进 .env 给 BFF 用
+  # shellcheck disable=SC1091
+  . ./.env
+  if [ -z "${SUB2API_ADMIN_KEY:-}" ] || [ "${SUB2API_ADMIN_KEY}" = "not-set" ]; then
+    say "等待 sub2api 就绪，生成管理密钥…"
+    local key="" ok=""
+    for _ in $(seq 1 60); do
+      if docker compose exec -T bff wget -q -O - http://sub2api:8080/health >/dev/null 2>&1; then ok=1; break; fi
+      sleep 3
+    done
+    if [ -n "$ok" ]; then
+      key=$(docker compose exec -T -e E="$SUB2API_ADMIN_EMAIL" -e P="$SUB2API_ADMIN_PASSWORD" bff node -e '
+        (async () => {
+          const u = "http://sub2api:8080/api/v1";
+          const j = r => r.json();
+          const l = await fetch(u + "/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: process.env.E, password: process.env.P }) }).then(j);
+          const t = l && l.data && l.data.access_token;
+          if (!t) { console.error(JSON.stringify(l)); process.exit(1); }
+          const k = await fetch(u + "/admin/settings/admin-api-key/regenerate", { method: "POST", headers: { authorization: "Bearer " + t } }).then(j);
+          if (!k || !k.data || !k.data.key) { console.error(JSON.stringify(k)); process.exit(1); }
+          process.stdout.write(k.data.key);
+        })().catch(e => { console.error(e.message); process.exit(1); });' 2>/dev/null) || key=""
+    fi
+    if [ -n "$key" ]; then
+      sed -i "s|^SUB2API_ADMIN_KEY=.*|SUB2API_ADMIN_KEY=$key|" .env
+      docker compose up -d bff
+      say "管理密钥已生成并写入 .env"
+    else
+      warn "没能自动生成 sub2api 管理密钥。请按下面「sub2api 后台」的方法登录，"
+      warn "在 系统设置 → Admin API Key 生成后，填到 $APP_DIR/.env 的 SUB2API_ADMIN_KEY=，再运行 docker compose up -d bff"
+    fi
+  fi
+}
+
+print_app_notes() {
+  # shellcheck disable=SC1091
+  . "$APP_DIR/.env"
+  echo
+  echo " ───── App 后端（BFF）+ sub2api ─────"
+  echo " App 地址:      https://$DOMAIN/app/   （App 安装包打开的就是这个页面）"
+  echo " sub2api 后台:  不对外开放。在你自己电脑上运行："
+  echo "     ssh -L 8080:127.0.0.1:8080 root@本服务器IP"
+  echo "   然后浏览器打开 http://127.0.0.1:8080"
+  echo "   账号: $SUB2API_ADMIN_EMAIL"
+  echo "   密码: 运行  grep SUB2API_ADMIN_PASSWORD $APP_DIR/.env  查看"
+  echo " 在 sub2api 后台：添加上游账号/渠道 → 建好分组（记下分组 ID）"
+  echo " 然后编辑 $APP_DIR/.env 填写："
+  echo "   SUB2API_GROUP_ID=分组ID   EPAY_URL= / EPAY_PID= / EPAY_KEY=（易支付）  CNY_PER_USD=汇率"
+  echo " 改完运行：cd $APP_DIR && docker compose up -d bff"
+}
 
 if [ "${1:-}" = "update" ]; then
   [ -f "$APP_DIR/.env" ] || die "还没安装过，请先直接运行 bash install.sh"
@@ -43,10 +127,11 @@ if [ "${1:-}" = "update" ]; then
   [ -f /tmp/ai-relay-config.js.bak ] && mv /tmp/ai-relay-config.js.bak "$APP_DIR/web/config.js"
   if [ -d /tmp/ai-relay-download.bak ] && [ ! -d "$APP_DIR/web/download" ]; then mv /tmp/ai-relay-download.bak "$APP_DIR/web/download"; fi
   cd "$APP_DIR"
-  say "拉取最新 new-api 镜像并重启…"
-  docker compose pull
-  docker compose up -d
+  say "拉取最新镜像…"
+  docker compose pull --ignore-buildable 2>/dev/null || docker compose pull --ignore-pull-failures || true
+  ensure_app_stack
   say "更新完成 ✅"
+  print_app_notes
   exit 0
 fi
 
@@ -93,6 +178,12 @@ CRYPTO_SECRET=${CRYPTO_SECRET:-$(rand 48)}
 
 extract_payload
 
+# 保留旧 .env 里 sub2api / BFF / 支付相关的配置和密钥
+EXTRA_ENV=""
+if [ -f "$APP_DIR/.env" ]; then
+  EXTRA_ENV=$(grep -vE '^(DOMAIN|ADMIN_DOMAIN|DB_PASSWORD|REDIS_PASSWORD|SESSION_SECRET|CRYPTO_SECRET|TZ|HTTP_PORT|HTTPS_PORT)=' "$APP_DIR/.env" || true)
+fi
+
 cat >"$APP_DIR/.env" <<EOF
 DOMAIN=$DOMAIN
 ADMIN_DOMAIN=$ADMIN_DOMAIN
@@ -104,6 +195,7 @@ TZ=Asia/Shanghai
 HTTP_PORT=$HTTP_PORT
 HTTPS_PORT=$HTTPS_PORT
 EOF
+if [ -n "$EXTRA_ENV" ]; then printf '%s\n' "$EXTRA_ENV" >>"$APP_DIR/.env"; fi
 chmod 600 "$APP_DIR/.env"
 
 # 防火墙放行 80/443（有 ufw 才处理）
@@ -111,9 +203,7 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q 'Status: a
   ufw allow 80/tcp; ufw allow "$HTTPS_PORT"/tcp; ufw allow "$HTTPS_PORT"/udp
 fi
 
-cd "$APP_DIR"
-say "启动服务（第一次要下载镜像，约 1-3 分钟）…"
-docker compose up -d --remove-orphans
+ensure_app_stack
 
 say "等待后端就绪…"
 for _ in $(seq 1 60); do
@@ -144,7 +234,9 @@ if [ "$HTTPS_PORT" != 443 ]; then
   echo "    3) 规则 → Origin Rules → 创建规则：主机名 等于 $DOMAIN 或 $ADMIN_DOMAIN，"
   echo "       目标端口 改写为 $HTTPS_PORT"
 fi
-echo " 配置文件和数据都在 $APP_DIR ，请定期备份 $APP_DIR/data"
+print_app_notes
+echo
+echo " 配置文件和数据都在 $APP_DIR ，请定期备份 $APP_DIR/data 和 docker 卷 ai-relay_sub2api_data"
 echo "==============================================="
 exit 0
 __PAYLOAD_BELOW__

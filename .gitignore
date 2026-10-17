@@ -5,3 +5,8 @@ app/release/
 app/site.json
 app/capacitor.config.json
 *.keystore
+.env
+*.env
+!.env.example
+bff/data/
+*.db

@@ -6,6 +6,18 @@
 {$DOMAIN} {
 	encode zstd gzip
 
+	# ───── App 后端（BFF）+ App 界面：/app/ ─────
+	# sub2api 不在这里出现，外网访问不到它的任何页面和接口
+	handle /app* {
+		reverse_proxy bff:8787 {
+			flush_interval -1
+			transport http {
+				read_timeout 15m
+				write_timeout 15m
+			}
+		}
+	}
+
 	# 易支付付款完成后，new-api 会跳回 /usage-logs，这里转到前台的账单页
 	redir /usage-logs* /#/billing?paid=1 302
 	redir /console* /#/dashboard 302
