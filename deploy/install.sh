@@ -231,7 +231,8 @@ if [ "${1:-}" = "update" ]; then
   # 服务器上改过的站点配置（品牌名、客服链接等）保留不覆盖
   [ -f "$APP_DIR/web/config.js" ] && cp "$APP_DIR/web/config.js" /tmp/ai-relay-config.js.bak
   [ -d "$APP_DIR/web/download" ] && mv "$APP_DIR/web/download" /tmp/ai-relay-download.bak
-  rm -rf "$APP_DIR/web"
+  # 只清空文件夹里的内容、不删文件夹本身：Caddy 容器挂载的是这个文件夹，删了重建会让它一直读到已删除的旧目录（首页 404）
+  mkdir -p "$APP_DIR/web" && find "$APP_DIR/web" -mindepth 1 -delete
   extract_payload
   [ -f /tmp/ai-relay-config.js.bak ] && mv /tmp/ai-relay-config.js.bak "$APP_DIR/web/config.js"
   if [ -d /tmp/ai-relay-download.bak ] && [ ! -d "$APP_DIR/web/download" ]; then mv /tmp/ai-relay-download.bak "$APP_DIR/web/download"; fi
@@ -239,6 +240,7 @@ if [ "${1:-}" = "update" ]; then
   say "拉取最新镜像…"
   docker compose pull --ignore-buildable 2>/dev/null || docker compose pull --ignore-pull-failures || true
   ensure_app_stack
+  docker compose restart caddy >/dev/null 2>&1 || true   # 保险：让 Caddy 重新读取网页文件和配置
   say "更新完成 ✅"
   print_app_notes
   exit 0
