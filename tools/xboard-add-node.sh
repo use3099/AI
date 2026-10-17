@@ -41,10 +41,11 @@ if ($old) { echo "XN_ID=" . $old->id . "\nXN_LIMIT=existing\n"; } else {
 }
 PHP
 )"
-ERR="$(printf '%s\n' "$OUT" | sed -n 's/.*XN_ERR=//p')"
+RES="$(printf '%s\n' "$OUT" | grep -v 'echo')"   # tinker 会回显输入的代码，去掉代码行，只留结果
+ERR="$(printf '%s\n' "$RES" | sed -n 's/.*XN_ERR=//p')"
 [ -z "$ERR" ] || { echo "$ERR"; exit 1; }
-ID="$(printf '%s\n' "$OUT" | sed -n 's/.*XN_ID=\([0-9]*\).*/\1/p' | head -1)"
-LIM="$(printf '%s\n' "$OUT" | sed -n 's/.*XN_LIMIT=\([a-z]*\).*/\1/p' | head -1)"
+ID="$(printf '%s\n' "$RES" | sed -n 's/.*XN_ID=\([0-9][0-9]*\).*/\1/p' | head -1)"
+LIM="$(printf '%s\n' "$RES" | sed -n 's/.*XN_LIMIT=\([a-z][a-z]*\).*/\1/p' | head -1)"
 [ -n "$ID" ] || { echo "创建节点失败，面板返回："; printf '%s\n' "$OUT" | tail -20; exit 1; }
 
 echo
