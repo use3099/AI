@@ -38,4 +38,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 `);
 
+// 升级：生图专用 Key（老数据库没有这一列就补上）
+const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
+if (!cols.includes('s2_img_key_enc')) db.exec('ALTER TABLE users ADD COLUMN s2_img_key_enc TEXT');
+
 module.exports = db;

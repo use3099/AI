@@ -82,9 +82,9 @@ module.exports = {
     return data.access_token;
   },
 
-  async createKey(jwt, name) {
+  async createKey(jwt, name, groupId = config.sub2api.groupId) {
     const body = { name };
-    if (config.sub2api.groupId) body.group_id = config.sub2api.groupId;
+    if (groupId) body.group_id = groupId;
     const data = await call('POST', '/api/v1/keys', { body, headers: { authorization: `Bearer ${jwt}` } });
     if (!data || !data.key) throw new Sub2apiError('sub2api 创建 Key 未返回 key', 500, data);
     return data.key;

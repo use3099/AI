@@ -115,6 +115,9 @@ services:
       - CNY_PER_USD=${CNY_PER_USD:-7.2}
       - RECHARGE_AMOUNTS=${RECHARGE_AMOUNTS:-10,30,50,100,200}
       - ALLOWED_MODELS=${ALLOWED_MODELS:-}
+      - SUB2API_IMAGE_GROUP_ID=${SUB2API_IMAGE_GROUP_ID:-}
+      - IMAGE_MODELS=${IMAGE_MODELS:-}
+      - IMAGE_PRICE_NOTE=${IMAGE_PRICE_NOTE:-}
       - TZ=${TZ:-Asia/Shanghai}
     depends_on:
       - sub2api

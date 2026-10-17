@@ -15,6 +15,7 @@
   let token = store.get('xs_token', '');
   let me = null;
   let cnyPerUsd = 7.2;
+  let appCfg = null;   // /api/config：充值、生图是否开放
 
   function toast(msg, kind = '') {
     const t = $('#toast');
@@ -55,7 +56,10 @@
     user: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 19c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/></svg>',
     back: '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
     trash: '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></svg>',
+    image: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9.5" cy="10" r="1.6"/><path d="M5 17l4.5-4.5 3.5 3.5 2.5-2.5L20 18"/></svg>',
+    chat: '<svg viewBox="0 0 24 24"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0a2 2 0 0 1-2-2z"/></svg>',
   };
+  const imageOn = () => !!(appCfg && appCfg.image && appCfg.image.enabled);
   const logo = '<img class="logo" src="icon.svg" alt="">';
 
   // ───────── 登录 / 注册 ─────────
@@ -122,6 +126,7 @@
         <aside class="sidebar" id="sidebar">
           <div class="side-head">${logo}<strong>星枢 API</strong></div>
           <button class="btn primary block" id="newChat">${icon.plus}新对话</button>
+          ${imageOn() ? `<a class="btn block" href="#/image">${icon.image}AI 生图</a>` : ''}
           <nav class="conv-list" id="convList"></nav>
           <a class="side-account" href="#/account">${icon.user}<span><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>
         </aside>
@@ -130,6 +135,7 @@
           <header class="chat-head">
             <button class="icon-btn only-mobile" id="openSide" aria-label="对话列表">${icon.menu}</button>
             <select id="modelSel" aria-label="选择模型"></select>
+            ${imageOn() ? `<a class="icon-btn" href="#/image" aria-label="AI 生图">${icon.image}</a>` : ''}
             <a class="icon-btn" href="#/account" aria-label="我的">${icon.user}</a>
           </header>
           <div class="messages" id="messages"></div>
@@ -317,6 +323,88 @@
     if (a && a.getAttribute('href') && a.getAttribute('href').startsWith('#')) { e.preventDefault(); go(a.getAttribute('href')); }
   });
 
+  // ───────── 生图 ─────────
+  const imgKey = () => `xs_imgs_${me ? me.user.id : 0}`;
+  let imgModels = [];
+  let imgBusy = false;
+
+  async function viewImage() {
+    if (!imageOn()) return pageShell('AI 生图', '<section class="card"><p>生图功能暂未开放，请联系客服。</p></section>');
+    const sizes = { '1024x1024': '方图 1:1', '1024x1536': '竖图 2:3', '1536x1024': '横图 3:2' };
+    const note = appCfg.image.price_note;
+    pageShell('AI 生图', `
+      <section class="card">
+        <label>模型<select id="imgModel"><option value="">加载中…</option></select></label>
+        <p class="muted small">尺寸</p>
+        <div class="amounts" id="imgSize">${Object.entries(sizes).map(([v, n], i) => `<button type="button" class="amount ${i === 0 ? 'on' : ''}" data-s="${v}">${n}</button>`).join('')}</div>
+        <label class="custom">描述你想要的画面<textarea id="imgPrompt" rows="4" maxlength="4000" placeholder="例如：雨夜的东京街头，霓虹灯倒映在积水里，电影感"></textarea></label>
+        <button class="btn primary block" id="imgGo">${icon.image}生成图片</button>
+        <p class="muted small center">${note ? esc(note) + ' · ' : ''}按张计费，从余额扣除 · 余额 ${yuan(me.balance_usd)}</p>
+      </section>
+      <div id="imgResults" class="img-results"></div>`);
+
+    const sel = $('#imgModel');
+    try { if (!imgModels.length) imgModels = (await api('GET', '/image/models')).models; } catch (e) { toast(e.message, 'err'); }
+    if (!$('#imgModel')) return; // 已离开页面
+    sel.innerHTML = imgModels.length ? imgModels.map(m => `<option>${esc(m)}</option>`).join('') : '<option value="">暂无可用模型</option>';
+    const saved = store.get('xs_img_model', '');
+    if (imgModels.includes(saved)) sel.value = saved;
+    sel.onchange = () => store.set('xs_img_model', sel.value);
+
+    const sizeBox = $('#imgSize');
+    sizeBox.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      sizeBox.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    });
+
+    let items = store.get(imgKey(), []);
+    const renderResults = () => {
+      const box = $('#imgResults'); if (!box) return;
+      box.innerHTML = items.map((it, i) => `
+        <figure class="card img-card">
+          ${it.pending ? '<div class="img-wait"><span class="typing"><i></i><i></i><i></i></span><small>正在生成，通常需要 10-60 秒…</small></div>'
+            : it.error ? `<div class="img-wait error"><small>⚠️ ${esc(it.error)}${/余额不足/.test(it.error) ? ' <a href="#/recharge">去充值</a>' : ''}</small></div>`
+            : `<img src="${it.src}" alt="${esc(it.prompt)}">`}
+          <figcaption><span>${esc(it.prompt)}</span>${it.src ? `<a class="btn ghost" href="${it.src}" download="xingshu-${it.at}.png">保存</a>` : ''}<button class="icon-btn" data-del="${i}" aria-label="删除">${icon.trash}</button></figcaption>
+        </figure>`).join('') + (items.some(x => x.src) ? '<p class="muted small center">手机上也可以长按图片保存到相册</p>' : '');
+    };
+    const persist = () => {
+      // 图片很大，只在本机保留最近 6 张
+      const keep = items.filter(x => x.src).slice(0, 6);
+      for (const n of [6, 3, 1, 0]) {
+        try { localStorage.setItem(imgKey(), JSON.stringify(keep.slice(0, n))); break; } catch { /* 存不下就少存几张 */ }
+      }
+    };
+    $('#imgResults').addEventListener('click', e => {
+      const d = e.target.closest('[data-del]'); if (!d) return;
+      items.splice(+d.dataset.del, 1); persist(); renderResults();
+    });
+    renderResults();
+
+    $('#imgGo').onclick = async () => {
+      if (imgBusy) return toast('上一张还在生成，请稍等', 'warn');
+      const prompt = $('#imgPrompt').value.trim();
+      if (!prompt) return toast('请先描述画面', 'warn');
+      if (!sel.value) return toast('暂无可用模型', 'warn');
+      const size = $('#imgSize .on').dataset.s;
+      const it = { prompt, pending: true, at: Date.now() };
+      items.unshift(it); renderResults();
+      imgBusy = true; $('#imgGo').disabled = true;
+      try {
+        const r = await api('POST', '/image', { model: sel.value, prompt, size });
+        it.src = r.images[0];
+      } catch (e) {
+        it.error = e.message;
+        if (/余额不足/.test(e.message)) toast('余额不足，请先充值', 'warn');
+      } finally {
+        delete it.pending; imgBusy = false;
+        persist(); renderResults();
+        const b = $('#imgGo'); if (b) b.disabled = false;
+        refreshBalance();
+      }
+    };
+  }
+
   // ───────── 我的 ─────────
   function pageShell(title, body, back = '#/chat') {
     app.innerHTML = `
@@ -468,6 +556,8 @@
     if (!me) {
       try { me = await api('GET', '/me'); cnyPerUsd = me.cny_per_usd || cnyPerUsd; } catch (e) { if (!token) return; toast(e.message, 'err'); return; }
     }
+    if (!appCfg) { try { appCfg = await api('GET', '/config'); } catch { /* 下次再取 */ } }
+    if (h.startsWith('#/image')) return viewImage();
     if (h.startsWith('#/account')) return viewAccount();
     if (h.startsWith('#/recharge')) return viewRecharge();
     if (h.startsWith('#/usage')) return viewUsage();

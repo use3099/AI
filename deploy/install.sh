@@ -48,6 +48,7 @@ ensure_app_stack() {
   setenv SUB2API_TOTP_KEY "$(hexrand 32)"
   setenv SUB2API_ADMIN_KEY ""
   setenv SUB2API_GROUP_ID ""
+  setenv SUB2API_IMAGE_GROUP_ID ""
   setenv BFF_JWT_SECRET "$(rand 48)"
   setenv BFF_DATA_SECRET "$(rand 48)"
   setenv SIGNUP_BALANCE_USD "0"
@@ -198,7 +199,8 @@ print_app_notes() {
   echo "   密码: 运行  grep SUB2API_ADMIN_PASSWORD $APP_DIR/.env  查看"
   echo " 在 sub2api 后台：添加上游账号/渠道 → 建好分组（记下分组 ID）"
   echo " 然后编辑 $APP_DIR/.env 填写："
-  echo "   SUB2API_GROUP_ID=分组ID   EPAY_URL= / EPAY_PID= / EPAY_KEY=（易支付）  CNY_PER_USD=汇率"
+  echo "   SUB2API_GROUP_ID=聊天分组ID   SUB2API_IMAGE_GROUP_ID=生图分组ID（不填 = App 里不显示生图）"
+  echo "   EPAY_URL= / EPAY_PID= / EPAY_KEY=（易支付）  CNY_PER_USD=汇率"
   echo " 改完运行：cd $APP_DIR && docker compose up -d bff"
 }
 

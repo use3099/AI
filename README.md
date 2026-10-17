@@ -65,6 +65,9 @@ ssh -L 8080:127.0.0.1:8080 root@服务器IP
 | `CNY_PER_USD` | 充值汇率：多少人民币换 1 美元额度，默认 7.2 |
 | `RECHARGE_AMOUNTS` | 充值档位，默认 `10,30,50,100,200` |
 | `ALLOWED_MODELS` | 只给客户显示这些模型（逗号分隔），留空 = 分组里有什么给什么 |
+| `SUB2API_IMAGE_GROUP_ID` | 生图分组 ID（sub2api 里勾选了「允许当前分组生图」的分组）。填了 App 里才出现「AI 生图」；每个用户第一次生图时会自动在这个分组再开一个 Key，聊天和生图分开计价 |
+| `IMAGE_MODELS` | 只给客户显示这些生图模型（逗号分隔），留空 = 生图分组里有什么给什么 |
+| `IMAGE_PRICE_NOTE` | 生图页面显示的价格说明，例如 `每张约 ¥0.05`（实际扣费以 sub2api 生图分组的单张价格为准） |
 
 改完运行 `cd /opt/ai-relay && docker compose up -d bff`。
 

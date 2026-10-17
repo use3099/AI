@@ -53,6 +53,14 @@ const config = {
 
   allowedModels: list('ALLOWED_MODELS', []),                 // 留空 = sub2api 分组里有什么就给什么
   chatPerMinute: num('CHAT_PER_MINUTE', 30),
+
+  // 生图：单独一个 sub2api 分组（勾选「允许当前分组生图」），每个用户另开一个只在这个分组里的 Key
+  image: {
+    groupId: env.SUB2API_IMAGE_GROUP_ID ? Number(env.SUB2API_IMAGE_GROUP_ID) : null,
+    models: list('IMAGE_MODELS', []),                        // 留空 = 生图分组里有什么就给什么
+    priceNote: (env.IMAGE_PRICE_NOTE || '').trim(),          // App 里显示的价格说明，例如「每张约 ¥0.05」
+    perMinute: num('IMAGE_PER_MINUTE', 6),
+  },
   trustProxy: (env.TRUST_PROXY || 'true') === 'true',
 };
 

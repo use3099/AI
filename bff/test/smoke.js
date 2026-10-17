@@ -37,6 +37,10 @@ const mock = http.createServer(async (req, res) => {
       return json(200, ok(user));
     }
     if ((m = u.pathname.match(/^\/api\/v1\/admin\/users\/(\d+)$/)) && req.method === 'GET') return json(200, ok(state.users.get(+m[1])));
+    if ((m = u.pathname.match(/^\/api\/v1\/admin\/users\/(\d+)$/)) && req.method === 'PUT') {
+      const user = state.users.get(+m[1]); if (body.password) user.password = body.password;
+      return json(200, ok(user));
+    }
     if (u.pathname === '/api/v1/admin/usage') {
       return json(200, ok({ items: [{ created_at: '2026-10-17T06:00:00Z', model: 'gpt-x', input_tokens: 10, output_tokens: 20, actual_cost: 0.001 }], total: 1, page: 1, page_size: 20, pages: 1 }));
     }
@@ -49,14 +53,24 @@ const mock = http.createServer(async (req, res) => {
   if (u.pathname === '/api/v1/keys' && req.method === 'POST') {
     const uid = +String(req.headers.authorization).replace('Bearer jwt-', '');
     const key = 'sk-' + crypto.randomBytes(8).toString('hex');
-    state.keys.set(key, uid);
-    return json(200, ok({ id: 1, key, name: body.name }));
+    state.keys.set(key, { uid, group: body.group_id || null });
+    return json(200, ok({ id: 1, key, name: body.name, group_id: body.group_id }));
   }
   if (u.pathname.startsWith('/v1/')) {
     const key = String(req.headers.authorization).replace('Bearer ', '');
-    const uid = state.keys.get(key);
-    if (!uid) return json(401, JSON.stringify({ error: { message: 'invalid api key' } }));
-    if (u.pathname === '/v1/models') return json(200, JSON.stringify({ object: 'list', data: [{ id: 'gpt-x' }, { id: 'claude-y' }] }));
+    const k = state.keys.get(key);
+    if (!k) return json(401, JSON.stringify({ error: { message: 'invalid api key' } }));
+    const uid = k.uid;
+    if (u.pathname === '/v1/models') {
+      const data = k.group === 3 ? [{ id: 'gpt-image-x' }] : [{ id: 'gpt-x' }, { id: 'claude-y' }];
+      return json(200, JSON.stringify({ object: 'list', data }));
+    }
+    if (u.pathname === '/v1/images/generations') {
+      if (k.group !== 3) return json(403, JSON.stringify({ error: { message: 'image generation not allowed for this group' } }));
+      if (state.users.get(uid).balance <= 0) return json(403, JSON.stringify({ error: { message: 'Insufficient balance' } }));
+      state.lastImage = body;
+      return json(200, JSON.stringify({ created: 1, data: [{ b64_json: Buffer.from('PNGDATA').toString('base64') }] }));
+    }
     if (u.pathname === '/v1/chat/completions') {
       if (state.users.get(uid).balance <= 0) return json(403, JSON.stringify({ error: { message: 'Insufficient balance' } }));
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -82,7 +96,7 @@ async function main() {
     env: {
       ...process.env, PORT: String(port), PUBLIC_URL: 'https://example.test', DATA_DIR: dataDir,
       BFF_JWT_SECRET: 'j'.repeat(48), BFF_DATA_SECRET: 'd'.repeat(48),
-      SUB2API_URL: mockUrl, SUB2API_ADMIN_KEY: ADMIN_KEY,
+      SUB2API_URL: mockUrl, SUB2API_ADMIN_KEY: ADMIN_KEY, SUB2API_GROUP_ID: '2', SUB2API_IMAGE_GROUP_ID: '3', IMAGE_PRICE_NOTE: '每张约 ¥0.05',
       EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -130,6 +144,15 @@ async function main() {
     r = await api('POST', '/api/chat', { model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }, token);
     assert.equal(r.status, 402, '余额为 0 时应提示充值: ' + JSON.stringify(r.body));
 
+    // 生图：配置里开放，余额为 0 时提示充值
+    r = await api('GET', '/api/config');
+    assert.equal(r.body.image.enabled, true);
+    assert.equal(r.body.image.price_note, '每张约 ¥0.05');
+    r = await api('GET', '/api/image/models', null, token);
+    assert.deepEqual(r.body.models, ['gpt-image-x'], '生图模型来自生图分组: ' + JSON.stringify(r.body));
+    r = await api('POST', '/api/image', { model: 'gpt-image-x', prompt: '一只猫' }, token);
+    assert.equal(r.status, 402, '生图余额不足: ' + JSON.stringify(r.body));
+
     // 充值：下单 → 模拟易支付回调 → 余额到账
     r = await api('POST', '/api/recharge', { amount: 70, method: 'alipay' }, token);
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -166,6 +189,17 @@ async function main() {
 
     r = await api('GET', '/api/usage', null, token);
     assert.equal(r.body.items[0].model, 'gpt-x');
+
+    // 生图成功：走生图分组的 Key，返回 data URL，响应里不含 key
+    r = await api('POST', '/api/image', { model: 'gpt-image-x', prompt: '一只猫', size: '1536x1024' }, token);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.ok(r.body.images[0].startsWith('data:image/png;base64,'));
+    assert.equal(state.lastImage.size, '1536x1024');
+    assert.equal(JSON.stringify(r.body).includes('sk-'), false);
+    r = await api('POST', '/api/image', { model: 'gpt-image-x', prompt: '' }, token);
+    assert.equal(r.status, 400, '空描述');
+    // 聊天 Key 仍在聊天分组
+    assert.ok([...state.keys.values()].some(k => k.group === 2), '聊天 Key 在分组 2');
 
     // 另一个用户不能查看别人的订单
     const r2 = await api('POST', '/api/auth/register', { account: '+61400000000', password: 'password456' });

@@ -131,6 +131,45 @@ function userKey(user) {
   return decrypt(user.s2_key_enc);
 }
 
+// 生图 Key：第一次用生图时才开（只在生图分组里，和聊天分开计价）
+const imgKeyJobs = new Map();
+async function imageKey(user) {
+  if (!config.image.groupId) throw new HttpError(503, '生图功能暂未开放');
+  if (user.s2_img_key_enc) return decrypt(user.s2_img_key_enc);
+  if (!user.s2_user_id) throw new HttpError(503, '账号还在初始化，请稍后重试');
+  if (!imgKeyJobs.has(user.id)) {
+    const job = (async () => {
+      const password = randomString(32);
+      await s2.setPassword(user.s2_user_id, password);
+      const jwt = await s2.login(user.s2_email, password);
+      const key = await s2.createKey(jwt, 'app-image', config.image.groupId);
+      db.prepare('UPDATE users SET s2_img_key_enc = ? WHERE id = ?').run(encrypt(key), user.id);
+      return key;
+    })().finally(() => imgKeyJobs.delete(user.id));
+    imgKeyJobs.set(user.id, job);
+  }
+  try {
+    return await imgKeyJobs.get(user.id);
+  } catch (e) {
+    log('开通生图失败', user.id, e.message);
+    throw new HttpError(503, '生图功能开通失败，请稍后再试');
+  }
+}
+
+// 上游返回非 2xx 时，转成给客户看的错误
+async function upstreamError(upstream, tag) {
+  const text = await upstream.text().catch(() => '');
+  let msg = '';
+  try { const j = JSON.parse(text); msg = j.error?.message || j.message || ''; } catch { msg = text; }
+  // sub2api 余额不足：403 INSUFFICIENT_BALANCE "Insufficient account balance"（middleware/api_key_auth.go）
+  if (upstream.status === 402 || /insufficient|余额不足/i.test(msg + ' ' + text)) {
+    return new HttpError(402, '余额不足，请先充值');
+  }
+  if (upstream.status === 429) return new HttpError(429, '当前使用人数较多，请稍后再试');
+  log(`${tag} 上游错误`, upstream.status, msg.slice(0, 200));
+  return new HttpError(upstream.status >= 500 ? 502 : upstream.status, cleanMessage(msg) || '请求失败');
+}
+
 // ───────── 充值到账（支付成功 → 给 sub2api 加余额） ─────────
 async function creditOrder(no) {
   const order = db.prepare('SELECT * FROM orders WHERE no = ?').get(no);
@@ -168,6 +207,7 @@ route('GET', '/api/config', async () => ({
     max: config.rechargeMax,
     cny_per_usd: config.cnyPerUsd,
   },
+  image: { enabled: !!config.image.groupId, price_note: config.image.priceNote, sizes: IMAGE_SIZES },
 }));
 
 route('POST', '/api/auth/register', async (req) => {
@@ -279,17 +319,7 @@ route('POST', '/api/chat', async (req, res) => {
     throw new HttpError(502, '服务暂时不可用，请稍后再试');
   }
 
-  if (!upstream.ok) {
-    const text = await upstream.text().catch(() => '');
-    let msg = '';
-    try { const j = JSON.parse(text); msg = j.error?.message || j.message || ''; } catch { msg = text; }
-    // sub2api 余额不足：403 INSUFFICIENT_BALANCE "Insufficient account balance"（middleware/api_key_auth.go）
-    if (upstream.status === 402 || /insufficient|余额不足/i.test(msg + ' ' + text)) {
-      throw new HttpError(402, '余额不足，请先充值');
-    }
-    log('chat 上游错误', upstream.status, msg.slice(0, 200));
-    throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, cleanMessage(msg) || '请求失败');
-  }
+  if (!upstream.ok) throw await upstreamError(upstream, 'chat');
 
   res.writeHead(200, {
     'content-type': upstream.headers.get('content-type') || (body.stream ? 'text/event-stream' : 'application/json'),
@@ -307,6 +337,77 @@ route('POST', '/api/chat', async (req, res) => {
   res.end();
   return undefined; // 已自行响应
 }, { raw: true });
+
+// ───────── 生图 ─────────
+let imageModelsCache = { at: 0, list: [] };
+route('GET', '/api/image/models', async (req) => {
+  const user = auth(req);
+  if (config.image.models.length) { await imageKey(user); return { models: config.image.models }; }
+  if (Date.now() - imageModelsCache.at < 5 * 60 * 1000 && imageModelsCache.list.length) return { models: imageModelsCache.list };
+  const r = await s2.gateway('GET', '/models', await imageKey(user), undefined, AbortSignal.timeout(15000));
+  if (!r.ok) throw new HttpError(502, '获取生图模型失败');
+  const j = await r.json();
+  const ids = [...new Set((j.data || []).map(m => m.id).filter(Boolean))].sort();
+  imageModelsCache = { at: Date.now(), list: ids };
+  return { models: ids };
+});
+
+const IMAGE_SIZES = ['1024x1024', '1024x1536', '1536x1024', 'auto'];
+
+// 上游有时返回图片网址：由服务器下载后转成 data URL，App 里不出现上游地址
+async function toDataUrl(src) {
+  if (!/^https:\/\//i.test(src)) throw new Error('图片地址无效');
+  const r = await fetch(src, { signal: AbortSignal.timeout(60000) });
+  if (!r.ok) throw new Error(`下载图片失败 ${r.status}`);
+  const type = (r.headers.get('content-type') || 'image/png').split(';')[0];
+  if (!type.startsWith('image/')) throw new Error('不是图片');
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length > 20 * 1024 * 1024) throw new Error('图片太大');
+  return `data:${type};base64,${buf.toString('base64')}`;
+}
+
+route('POST', '/api/image', async (req, res) => {
+  const user = auth(req);
+  rateLimit('image:' + user.id, config.image.perMinute, 60 * 1000);
+  const raw = await readJson(req, 64 * 1024);
+  const prompt = String(raw.prompt || '').trim();
+  if (!prompt) throw new HttpError(400, '请描述你想生成的图片');
+  if (prompt.length > 4000) throw new HttpError(400, '描述太长了，请精简到 4000 字以内');
+  const model = String(raw.model || '');
+  if (!model) throw new HttpError(400, '请选择生图模型');
+  if (config.image.models.length && !config.image.models.includes(model)) throw new HttpError(400, '该模型暂不可用');
+  const size = IMAGE_SIZES.includes(raw.size) ? raw.size : '1024x1024';
+  const key = await imageKey(user);
+
+  const ctrl = new AbortController();
+  res.on('close', () => { if (!res.writableEnded) ctrl.abort(); });
+  const timer = setTimeout(() => ctrl.abort(), 5 * 60 * 1000);
+  let upstream;
+  try {
+    upstream = await s2.gateway('POST', '/images/generations', key, { model, prompt, size, n: 1 }, ctrl.signal);
+  } catch (e) {
+    clearTimeout(timer);
+    log('image 上游连接失败', e.message);
+    throw new HttpError(502, ctrl.signal.aborted ? '生成超时，请稍后再试' : '服务暂时不可用，请稍后再试');
+  }
+  try {
+    if (!upstream.ok) throw await upstreamError(upstream, 'image');
+    const j = await upstream.json();
+    const images = [];
+    for (const d of j.data || []) {
+      if (d.b64_json) images.push(`data:image/png;base64,${d.b64_json}`);
+      else if (d.url) images.push(await toDataUrl(d.url));
+    }
+    if (!images.length) throw new HttpError(502, '模型没有返回图片，请换个描述再试');
+    return { images, revised_prompt: (j.data && j.data[0] && j.data[0].revised_prompt) || undefined };
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    log('image 处理失败', e.message);
+    throw new HttpError(502, '生成失败，请稍后再试');
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 route('GET', '/api/usage', async (req, res, url) => {
   const user = auth(req);
