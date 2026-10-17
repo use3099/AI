@@ -137,6 +137,14 @@ async function main() {
 
     r = await api('GET', '/api/me');
     assert.equal(r.status, 401, '未登录访问');
+    r = await api('GET', '/api/models');
+    assert.equal(r.status, 200, '游客可以看模型列表');
+    assert.ok(Array.isArray(r.body.models));
+    assert.equal(JSON.stringify(r.body).includes('sk-'), false);
+    r = await api('POST', '/api/chat', { model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] });
+    assert.equal(r.status, 401, '游客不能对话');
+    r = await api('POST', '/api/image', { model: 'gpt-image-x', prompt: 'x' });
+    assert.equal(r.status, 401, '游客不能生图');
 
     r = await api('GET', '/api/models', null, token);
     assert.deepEqual(r.body.models, ['claude-y', 'gpt-x']);

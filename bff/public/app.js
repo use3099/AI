@@ -42,7 +42,7 @@
     token = ''; me = null;
     store.del('xs_token');
     if (expired) toast('登录已失效，请重新登录');
-    go('#/login');
+    go('#/chat');
   }
 
   const go = h => { if (location.hash !== h) location.hash = h; else render(); };
@@ -55,6 +55,7 @@
     stop: '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>',
     user: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 19c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/></svg>',
     back: '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
+    close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
     trash: '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></svg>',
     image: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9.5" cy="10" r="1.6"/><path d="M5 17l4.5-4.5 3.5 3.5 2.5-2.5L20 18"/></svg>',
     chat: '<svg viewBox="0 0 24 24"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0a2 2 0 0 1-2-2z"/></svg>',
@@ -100,23 +101,26 @@
   }
 
   // ───────── 登录 / 注册 ─────────
-  function viewAuth(mode) {
-    const isReg = mode === 'register';
-    app.innerHTML = `
-      <main class="auth">
-        ${tide()}
+  function authCard(isReg, inModal, reason) {
+    const sw = inModal
+      ? (isReg ? '已有账号？<button type="button" class="linkish" data-switch="login">去登录</button>' : '还没有账号？<button type="button" class="linkish" data-switch="register">注册一个</button>')
+      : (isReg ? '已有账号？<a href="#/login">去登录</a>' : '还没有账号？<a href="#/register">注册一个</a>');
+    return `
         <div class="auth-card">
-          <div class="brand">${logo}<div><h1>星枢 API</h1><p>聊天、写作、生成图片，一个账号就够</p></div></div>
-          <form id="authForm" novalidate>
+          ${inModal ? `<button type="button" class="icon-btn modal-close" aria-label="关闭">${icon.close}</button>` : ''}
+          <div class="brand">${logo}<div><h1>${isReg ? '注册星枢 API' : '登录星枢 API'}</h1><p>${esc(reason || '聊天、写作、生成图片，一个账号就够')}</p></div></div>
+          <form class="authForm" novalidate>
             <label>邮箱或手机号<input name="account" autocomplete="username" inputmode="email" required></label>
             <label>密码<input name="password" type="password" autocomplete="${isReg ? 'new-password' : 'current-password'}" minlength="8" required></label>
             ${isReg ? '<label>确认密码<input name="password2" type="password" autocomplete="new-password" required></label>' : ''}
-            <button class="btn primary block" type="submit">${isReg ? '注册并登录' : '登录'}</button>
+            <button class="btn primary block" type="submit">${isReg ? '注册并开始使用' : '登录'}</button>
           </form>
-          <p class="switch">${isReg ? '已有账号？<a href="#/login">去登录</a>' : '还没有账号？<a href="#/register">注册一个</a>'}</p>
-        </div>
-      </main>`;
-    $('#authForm').addEventListener('submit', async e => {
+          <p class="switch">${sw}</p>
+        </div>`;
+  }
+
+  function bindAuth(root, isReg, onDone) {
+    $('.authForm', root).addEventListener('submit', async e => {
       e.preventDefault();
       const f = e.target;
       const btn = $('button[type=submit]', f);
@@ -128,14 +132,43 @@
       btn.disabled = true; btn.textContent = '请稍候…';
       try {
         const r = await api('POST', `/auth/${isReg ? 'register' : 'login'}`, { account, password });
-        token = r.token; store.set('xs_token', token);
-        go('#/chat');
+        token = r.token; store.set('xs_token', token); me = null;
+        onDone();
       } catch (err) {
         toast(err.message, 'err');
-        btn.disabled = false; btn.textContent = isReg ? '注册并登录' : '登录';
+        btn.disabled = false; btn.textContent = isReg ? '注册并开始使用' : '登录';
       }
     });
   }
+
+  // 整页登录 / 注册（直接打开 #/login、#/register 时）
+  function viewAuth(mode) {
+    const isReg = mode === 'register';
+    app.innerHTML = `<main class="auth">${tide()}${authCard(isReg, false)}</main>`;
+    bindAuth(app, isReg, () => go('#/chat'));
+  }
+
+  // 弹窗登录 / 注册：游客发消息、生图时弹出，登录后留在原页面
+  function openAuth(mode = 'register', reason = '') {
+    closeAuth();
+    const wrap = document.createElement('div');
+    wrap.className = 'modal';
+    wrap.id = 'authModal';
+    const paint = m => {
+      const isReg = m === 'register';
+      wrap.innerHTML = authCard(isReg, true, reason);
+      bindAuth(wrap, isReg, () => { closeAuth(); toast(isReg ? '注册成功，开始吧' : '登录成功', 'ok'); render(); });
+      const first = $('input', wrap); if (first && window.matchMedia('(pointer: fine)').matches) first.focus();
+    };
+    wrap.addEventListener('click', e => {
+      if (e.target === wrap || e.target.closest('.modal-close')) { sessionStorage.removeItem('xs_pending'); closeAuth(); return; }
+      const sw = e.target.closest('[data-switch]'); if (sw) paint(sw.dataset.switch);
+    });
+    document.body.appendChild(wrap);
+    paint(mode);
+  }
+  function closeAuth() { const m = $('#authModal'); if (m) m.remove(); }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAuth(); });
 
   // ───────── 对话 ─────────
   const convKey = () => `xs_convs_${me ? me.user.id : 0}`;
@@ -168,7 +201,8 @@
             ${imageOn() ? `<a class="btn" href="#/image">${icon.image}AI 生图</a>` : ''}
           </div>
           <nav class="conv-list" id="convList"></nav>
-          <a class="side-account" href="#/account">${icon.user}<span><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>
+          ${me ? `<a class="side-account" href="#/account">${icon.user}<span><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>`
+               : `<button type="button" class="side-account guest" id="guestLogin">${icon.user}<span><b>登录 / 注册</b><small>注册后就能开始对话</small></span></button>`}
         </aside>
         <div class="scrim" id="scrim"></div>
         <section class="chat-main">
@@ -176,7 +210,7 @@
             <button class="icon-btn only-mobile" id="openSide" aria-label="对话列表">${icon.menu}</button>
             <select id="modelSel" aria-label="选择模型"></select>
             ${imageOn() ? `<a class="icon-btn" href="#/image" aria-label="AI 生图">${icon.image}</a>` : ''}
-            <a class="icon-btn" href="#/account" aria-label="我的">${icon.user}</a>
+            ${me ? `<a class="icon-btn" href="#/account" aria-label="我的">${icon.user}</a>` : '<button type="button" class="btn sm-login" id="headLogin">登录</button>'}
           </header>
           <div class="tideline" id="tideline"></div>
           ${tide('chat-tide')}
@@ -192,13 +226,17 @@
     const closeSide = () => { sidebar.classList.remove('open'); scrim.classList.remove('show'); };
     $('#openSide').onclick = () => { sidebar.classList.add('open'); scrim.classList.add('show'); };
     scrim.onclick = closeSide;
+    if (!me) {
+      $('#guestLogin').onclick = () => openAuth('register');
+      $('#headLogin').onclick = () => openAuth('login');
+    }
     $('#newChat').onclick = () => { newConv(); renderConvList(); renderMessages(); closeSide(); $('#input').focus(); };
 
     const sel = $('#modelSel');
     try {
       if (!models.length) models = (await api('GET', '/models')).models;
     } catch (e) { toast(e.message, 'err'); }
-    sel.innerHTML = models.length ? models.map(m => `<option>${esc(m)}</option>`).join('') : '<option value="">暂无可用模型</option>';
+    sel.innerHTML = models.length ? models.map(m => `<option>${esc(m)}</option>`).join('') : `<option value="">${me ? '暂无可用模型' : '登录后选择模型'}</option>`;
     const pick = (current && current.model) || store.get('xs_model', models[0] || '');
     if (models.includes(pick)) sel.value = pick;
     sel.onchange = () => { store.set('xs_model', sel.value); if (current) { current.model = sel.value; saveConvs(); } };
@@ -273,6 +311,10 @@
       if (streaming) { streaming.abort(); return; }
       const text = input.value.trim();
       if (!text) return;
+      if (!me) {
+        sessionStorage.setItem('xs_pending', text);
+        return openAuth('register', '注册后就能收到回复，刚才的问题会自动发送');
+      }
       if (!sel.value) return toast('暂无可用模型', 'warn');
       if (!current) newConv();
       current.model = sel.value;
@@ -364,9 +406,18 @@
 
     renderConvList();
     renderMessages();
+
+    // 游客注册 / 登录前输入的问题，登录后自动发出
+    const pending = me && sessionStorage.getItem('xs_pending');
+    if (pending) {
+      sessionStorage.removeItem('xs_pending');
+      input.value = pending; autosize();
+      setTimeout(() => $('#composer') && $('#composer').requestSubmit(), 250);
+    }
   }
 
   async function refreshBalance() {
+    if (!token) return;
     try {
       me = await api('GET', '/me'); cnyPerUsd = me.cny_per_usd || cnyPerUsd;
       const el = $('#sideBal'); if (el) el.textContent = `余额 ${yuan(me.balance_usd)}`;
@@ -395,14 +446,15 @@
         <div class="amounts" id="imgSize">${Object.entries(sizes).map(([v, n], i) => `<button type="button" class="amount ${i === 0 ? 'on' : ''}" data-s="${v}">${n}</button>`).join('')}</div>
         <label class="custom">描述你想要的画面<textarea id="imgPrompt" rows="4" maxlength="4000" placeholder="例如：雨夜的东京街头，霓虹灯倒映在积水里，电影感"></textarea></label>
         <button class="btn primary block" id="imgGo">${icon.image}生成图片</button>
-        <p class="muted small center">${note ? esc(note) + ' · ' : ''}按张计费，从余额扣除 · 余额 ${yuan(me.balance_usd)}</p>
+        <p class="muted small center">${note ? esc(note) + ' · ' : ''}按张计费，从余额扣除${me ? ' · 余额 ' + yuan(me.balance_usd) : ''}</p>
       </section>
       <div id="imgResults" class="img-results"></div>`);
 
     const sel = $('#imgModel');
-    try { if (!imgModels.length) imgModels = (await api('GET', '/image/models')).models; } catch (e) { toast(e.message, 'err'); }
+    if (me) { try { if (!imgModels.length) imgModels = (await api('GET', '/image/models')).models; } catch (e) { toast(e.message, 'err'); } }
     if (!$('#imgModel')) return; // 已离开页面
-    sel.innerHTML = imgModels.length ? imgModels.map(m => `<option>${esc(m)}</option>`).join('') : '<option value="">暂无可用模型</option>';
+    sel.innerHTML = !me ? '<option value="">登录后选择模型</option>'
+      : imgModels.length ? imgModels.map(m => `<option>${esc(m)}</option>`).join('') : '<option value="">暂无可用模型</option>';
     const saved = store.get('xs_img_model', '');
     if (imgModels.includes(saved)) sel.value = saved;
     sel.onchange = () => store.set('xs_img_model', sel.value);
@@ -436,11 +488,14 @@
       items.splice(+d.dataset.del, 1); persist(); renderResults();
     });
     renderResults();
+    const pendingPrompt = me && sessionStorage.getItem('xs_img_pending');
+    if (pendingPrompt) { sessionStorage.removeItem('xs_img_pending'); $('#imgPrompt').value = pendingPrompt; }
 
     $('#imgGo').onclick = async () => {
       if (imgBusy) return toast('上一张还在生成，请稍等', 'warn');
       const prompt = $('#imgPrompt').value.trim();
       if (!prompt) return toast('请先描述画面', 'warn');
+      if (!me) { sessionStorage.setItem('xs_img_pending', prompt); return openAuth('register', '注册后就能生成图片'); }
       if (!sel.value) return toast('暂无可用模型', 'warn');
       const size = $('#imgSize .on').dataset.s;
       const it = { prompt, pending: true, at: Date.now() };
@@ -607,14 +662,18 @@
   // ───────── 路由 ─────────
   async function render() {
     const h = location.hash || '#/chat';
+    if (!appCfg) { try { appCfg = await api('GET', '/config'); } catch { /* 下次再取 */ } }
     if (!token) {
+      // 游客：对话、生图页面都能看，发送时再登录
       if (h === '#/register') return viewAuth('register');
-      return viewAuth('login');
+      if (h === '#/login') return viewAuth('login');
+      if (h.startsWith('#/image')) return viewImage();
+      if (/^#\/(account|recharge|usage|orders|password)/.test(h)) return go('#/login');
+      return viewChat();
     }
     if (!me) {
       try { me = await api('GET', '/me'); cnyPerUsd = me.cny_per_usd || cnyPerUsd; } catch (e) { if (!token) return; toast(e.message, 'err'); return; }
     }
-    if (!appCfg) { try { appCfg = await api('GET', '/config'); } catch { /* 下次再取 */ } }
     if (h.startsWith('#/image')) return viewImage();
     if (h.startsWith('#/account')) return viewAccount();
     if (h.startsWith('#/recharge')) return viewRecharge();

@@ -277,10 +277,17 @@ route('GET', '/api/me', async (req) => {
 });
 
 let modelsCache = { at: 0, list: [] };
+// 游客也能看到模型列表（像 ChatGPT 一样先看界面，发消息时再注册）
+function anyUserKey() {
+  const row = db.prepare("SELECT s2_key_enc FROM users WHERE s2_key_enc IS NOT NULL AND status = 'active' ORDER BY id DESC LIMIT 1").get();
+  return row ? decrypt(row.s2_key_enc) : null;
+}
 route('GET', '/api/models', async (req) => {
-  const user = auth(req);
+  const user = req.headers.authorization ? auth(req) : null;
   if (Date.now() - modelsCache.at < 5 * 60 * 1000 && modelsCache.list.length) return { models: modelsCache.list };
-  const r = await s2.gateway('GET', '/models', userKey(user), undefined, AbortSignal.timeout(15000));
+  const key = user ? userKey(user) : anyUserKey();
+  if (!key) return { models: config.allowedModels };
+  const r = await s2.gateway('GET', '/models', key, undefined, AbortSignal.timeout(15000));
   if (!r.ok) throw new HttpError(502, '获取模型列表失败');
   const j = await r.json();
   let ids = (j.data || []).map(m => m.id).filter(Boolean);

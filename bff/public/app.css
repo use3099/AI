@@ -260,3 +260,17 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--j
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ───────── 游客：登录弹窗 ───────── */
+.modal { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 16px; background: rgba(8,14,26,.45); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); animation: fade .25s ease both; }
+.modal .auth-card { position: relative; animation: sheet .45s var(--spring) both; }
+@keyframes sheet { from { opacity: 0; transform: translateY(40px) scale(.97); } to { opacity: 1; transform: none; } }
+.modal-close { position: absolute; top: 10px; right: 10px; }
+.linkish { border: 0; background: none; padding: 0; color: var(--jade); font-weight: 600; cursor: pointer; }
+.side-account.guest { width: 100%; text-align: left; cursor: pointer; font: inherit; border-style: dashed; }
+.side-account.guest b { color: var(--jade); }
+.sm-login { min-height: 36px; padding: 0 14px; font-size: 14px; border-radius: 999px; }
+@media (max-width: 760px) {
+  .modal { place-items: end center; padding: 0; }
+  .modal .auth-card { max-width: none; border-radius: var(--r-shell) var(--r-shell) 0 0; padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+}
