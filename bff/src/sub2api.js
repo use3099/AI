@@ -72,6 +72,15 @@ module.exports = {
     });
   },
 
+  getGroup(id) {
+    return admin('GET', `/groups/${id}`);
+  },
+
+  // 模型默认单价（美元 / token），找不到返回 { found:false }
+  modelPricing(model) {
+    return admin('GET', `/channels/model-pricing?model=${encodeURIComponent(model)}`);
+  },
+
   listUsage(id, page = 1, pageSize = 20) {
     return admin('GET', `/usage?user_id=${id}&page=${page}&page_size=${pageSize}`);
   },

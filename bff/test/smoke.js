@@ -41,6 +41,13 @@ const mock = http.createServer(async (req, res) => {
       const user = state.users.get(+m[1]); if (body.password) user.password = body.password;
       return json(200, ok(user));
     }
+    if ((m = u.pathname.match(/^\/api\/v1\/admin\/groups\/(\d+)$/))) {
+      return json(200, ok(+m[1] === 3 ? { id: 3, rate_multiplier: 1, image_price_1k: 0.01 } : { id: +m[1], rate_multiplier: 1.5, model_pricing: [{ models: ['claude-y'], input_price: 0.000002, output_price: 0.00001 }] }));
+    }
+    if (u.pathname === '/api/v1/admin/channels/model-pricing') {
+      const model = u.searchParams.get('model');
+      return json(200, ok(model === 'gpt-x' ? { found: true, input_price: 0.000001, output_price: 0.000004 } : { found: false }));
+    }
     if (u.pathname === '/api/v1/admin/usage') {
       return json(200, ok({ items: [{ created_at: '2026-10-17T06:00:00Z', model: 'gpt-x', input_tokens: 10, output_tokens: 20, actual_cost: 0.001 }], total: 1, page: 1, page_size: 20, pages: 1 }));
     }
@@ -187,6 +194,51 @@ async function main() {
     assert.equal(r.body.balance_usd, 10, '¥70 / 7 = $10，且重复回调不重复加钱');
     r = await api('GET', `/api/recharge/${order_no}`, null, token);
     assert.equal(r.body.status, 'credited');
+
+    // 价格表（游客可看）：gpt-x 默认价 × 1.5 倍率；claude-y 用分组自定义价
+    r = await api('GET', '/api/pricing');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const gx = r.body.models.find(x => x.model === 'gpt-x');
+    assert.equal(gx.input, 10.5, '$1/M × 1.5 × 7 = ¥10.5: ' + JSON.stringify(gx));
+    assert.equal(gx.output, 42);
+    assert.equal(r.body.models.find(x => x.model === 'claude-y').input, 14);
+
+    // 套餐 + 邀请
+    r = await api('GET', '/api/config');
+    assert.equal(r.body.recharge.packages.length, 4);
+    assert.equal(r.body.referral.percent, 10);
+    r = await api('GET', '/api/invite', null, token);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const code = r.body.code;
+    assert.match(code, /^[A-Z2-9]{6}$/);
+    assert.ok(r.body.link.endsWith('/app/?ref=' + code));
+    r = await api('GET', '/api/invite', null, token);
+    assert.equal(r.body.code, code, '邀请码固定不变');
+    r = await api('POST', '/api/auth/register', { account: 'friend@example.com', password: 'password123', invite: code.toLowerCase() });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const ftoken = r.body.token;
+    r = await api('GET', '/api/recharge/bonus', null, ftoken);
+    assert.equal(r.body.first_bonus, 10);
+    // 好友买「常用」套餐 ¥50（送 5%）+ 受邀首充再送 10% → ¥50/7 × 1.15
+    r = await api('POST', '/api/recharge', { package: '2', method: 'wxpay' }, ftoken);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.amount_cny, '50.00');
+    assert.equal(r.body.bonus_percent, 15);
+    const fno = r.body.order_no;
+    const fn = { pid: '1001', trade_no: 'T2', out_trade_no: fno, type: 'wxpay', name: 'x', money: '50.00', trade_status: 'TRADE_SUCCESS' };
+    fn.sign = epaySign(fn); fn.sign_type = 'MD5';
+    n = await fetch(base + '/pay/notify?' + new URLSearchParams(fn));
+    assert.equal(await n.text(), 'success');
+    r = await api('GET', '/api/me', null, ftoken);
+    assert.ok(Math.abs(r.body.balance_usd - 50 / 7 * 1.15) < 1e-4, '好友到账含赠送: ' + r.body.balance_usd);
+    r = await api('GET', '/api/me', null, token);
+    assert.ok(Math.abs(r.body.balance_usd - (10 + 50 / 7 * 0.1)) < 1e-4, '邀请人得 10% 返利（不含赠送部分）: ' + r.body.balance_usd);
+    r = await api('GET', '/api/invite', null, token);
+    assert.equal(r.body.invited, 1); assert.equal(r.body.paid, 1);
+    r = await api('GET', '/api/recharge/bonus', null, ftoken);
+    assert.equal(r.body.first_bonus, 0, '首充赠送只有一次');
+    r = await api('POST', '/api/recharge', { package: '99', method: 'wxpay' }, ftoken);
+    assert.equal(r.status, 400, '不存在的套餐');
 
     // 对话：流式转发
     const cr = await fetch(base + '/api/chat', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }) });

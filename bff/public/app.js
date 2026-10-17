@@ -14,6 +14,11 @@
     del(k) { try { localStorage.removeItem(k); } catch { /* 忽略 */ } },
   };
   let token = store.get('xs_token', '');
+  // 邀请链接 …/app/?ref=CODE：记下邀请码，注册时自动带上
+  try {
+    const ref = new URLSearchParams(location.search).get('ref');
+    if (ref && /^[A-Za-z0-9]{4,16}$/.test(ref)) store.set('xs_ref', ref.toUpperCase());
+  } catch { /* 忽略 */ }
   let me = null;
   let cnyPerUsd = 7.2;
   let appCfg = null;   // /api/config：充值、生图是否开放
@@ -84,6 +89,9 @@
     chart: svg('<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>'),
     card: svg('<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/>'),
     lock: svg('<rect x="5" y="10" width="14" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'),
+    gift: svg('<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M3 10h18M12 10v10M12 10c-1.5-3.5-6-4-6-1.3C6 10 9 10 12 10zM12 10c1.5-3.5 6-4 6-1.3C18 10 15 10 12 10z"/>'),
+    tag: svg('<path d="M4 12V5a1 1 0 0 1 1-1h7l8 8-8 8z"/><circle cx="8.5" cy="8.5" r="1.3"/>'),
+    share: svg('<path d="M12 15V4M8 8l4-4 4 4M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/>'),
     bubble: svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
   };
   const imageOn = () => !!(appCfg && appCfg.image && appCfg.image.enabled);
@@ -118,7 +126,7 @@
 
   // 按下时的涟漪
   document.addEventListener('pointerdown', e => {
-    const el = e.target.closest('.btn, .send, .seg a, .ratio, .method, .amount');
+    const el = e.target.closest('.btn, .send, .seg a, .ratio, .method, .amount, .pkg');
     if (!el || el.disabled || reduceMotion()) return;
     const r = el.getBoundingClientRect();
     const dot = document.createElement('span');
@@ -156,10 +164,21 @@
           <form class="authForm" novalidate>
             <label class="field">邮箱或手机号<input name="account" autocomplete="username" inputmode="email" required></label>
             <label class="field">${isReg ? '设置密码' : '密码'}<input name="password" type="password" autocomplete="${isReg ? 'new-password' : 'current-password'}" minlength="8" placeholder="${isReg ? '至少 8 位' : ''}" required></label>
+            ${isReg ? inviteField() : ''}
             <button class="btn primary block" type="submit" data-label="${cta}">${cta}</button>
           </form>
           <p class="switch">${sw}</p>
         </div>`;
+  }
+
+  function inviteField() {
+    const ref = store.get('xs_ref', '');
+    const ri = appCfg && appCfg.referral;
+    const perk = ri && ri.invitee_bonus > 0 ? `，首次充值多送 ${ri.invitee_bonus}%` : '';
+    if (ref) return `<p class="invite-chip">${icon.gift}<span>已使用邀请码 <b>${esc(ref)}</b>${perk}</span><input type="hidden" name="invite" value="${esc(ref)}"></p>`;
+    return `<details class="invite-more"><summary>有邀请码？</summary>
+      <label class="field">邀请码（选填）<input name="invite" autocomplete="off" autocapitalize="characters" maxlength="16" placeholder="好友给你的 6 位码"></label>
+      ${perk ? `<p class="muted tiny">填写后${perk.slice(1)}</p>` : ''}</details>`;
   }
 
   function bindAuth(root, isReg, onDone) {
@@ -173,7 +192,9 @@
       if (isReg && password.length < 8) return toast('密码至少 8 位', 'warn');
       btn.disabled = true; btn.innerHTML = wavebars;
       try {
-        const r = await api('POST', `/auth/${isReg ? 'register' : 'login'}`, { account, password });
+        const invite = isReg && f.invite ? f.invite.value.trim() : '';
+        const r = await api('POST', `/auth/${isReg ? 'register' : 'login'}`, isReg ? { account, password, invite } : { account, password });
+        if (isReg) store.del('xs_ref');
         token = r.token; store.set('xs_token', token); me = null;
         onDone();
       } catch (err) {
@@ -258,6 +279,7 @@
           <div class="side-head">${mark()}<strong>星枢 API</strong></div>
           <button class="btn dark side-btn" id="newChat">${icon.plus}新对话</button>
           ${imageOn() ? `<a class="side-link" href="#/image">${icon.image}AI 生图</a>` : ''}
+          <a class="side-link" href="#/pricing">${icon.tag}价格表</a>
           <nav class="conv-list" id="convList" aria-label="历史对话"></nav>
           ${me ? `<a class="side-account" href="#/account"><span class="avatar sm">${esc(initial())}</span><span class="who"><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>`
                : `<button type="button" class="side-account guest" data-login><span class="avatar sm ghost">${svg('<circle cx="12" cy="8.5" r="3.5"/><path d="M5 19c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/>')}</span><span class="who"><b>登录 / 注册</b><small>注册后就能开始对话</small></span></button>`}
@@ -634,6 +656,31 @@
       </div>`;
   }
 
+  const rcfg = () => (appCfg && appCfg.recharge) || {};
+  const pkgs = () => rcfg().packages || [];
+  const pkgCredit = p => p.price * (1 + p.bonus / 100);
+  const refText = () => {
+    const r = appCfg && appCfg.referral;
+    if (!r || !(r.percent > 0)) return '把星枢分享给朋友';
+    return `好友每次充值，你得 ${r.percent}% 返利${r.invitee_bonus > 0 ? `；好友首充多送 ${r.invitee_bonus}%` : ''}`;
+  };
+  // 套餐卡片：横向滑动，点了直接去充值并选中
+  function pkgCard(p, i, onSel) {
+    return `<${onSel ? 'button type="button"' : 'a'} class="pkg ${p.hot ? 'hot' : ''} ${onSel && p.hot ? 'on' : ''}" ${onSel ? '' : `href="#/recharge?pkg=${p.id}"`} data-pkg="${p.id}" data-css="--i:${i}">
+        ${p.hot ? '<span class="pkg-badge">推荐</span>' : ''}
+        <span class="pkg-name">${esc(p.name)}</span>
+        <span class="pkg-price"><small>¥</small>${p.price}</span>
+        <span class="pkg-get">${p.bonus > 0 ? `到账 ¥${+pkgCredit(p).toFixed(2)}` : `到账 ¥${p.price}`}</span>
+        ${p.bonus > 0 ? `<span class="pkg-bonus">多送 ${p.bonus}%</span>` : '<span class="pkg-bonus plain">按量用，不过期</span>'}
+      </${onSel ? 'button' : 'a'}>`;
+  }
+  function pkgStrip(link = true) {
+    const list = pkgs();
+    if (!list.length) return '';
+    return `<section class="pkg-sec"><div class="sec-head"><h2>套餐推荐</h2>${link ? '<a href="#/pricing">看价格表</a>' : '<a href="#/recharge">去充值</a>'}</div>
+      <div class="pkgs">${list.map((p, i) => pkgCard(p, i)).join('')}</div></section>`;
+  }
+
   async function viewAccount() {
     await refreshBalance();
     pageShell('我的', `
@@ -643,7 +690,14 @@
         <p class="big"><span class="cur">¥</span><span id="bigBal">0.00</span></p>
         <a class="btn primary pill" href="#/recharge">充值</a>
       </section>
+      ${pkgStrip()}
+      <a class="invite-banner" href="#/invite">
+        <span class="ib-icon">${icon.gift}</span>
+        <span class="ib-text"><b>邀请好友，一起用</b><small>${refText()}</small></span>
+        ${icon.chev}
+      </a>
       <nav class="card list" aria-label="账户">
+        <a href="#/pricing">${icon.tag}<span>价格表</span>${icon.chev}</a>
         <a href="#/usage">${icon.chart}<span>使用记录</span>${icon.chev}</a>
         <a href="#/orders">${icon.card}<span>充值记录</span>${icon.chev}</a>
         <a href="#/password">${icon.lock}<span>修改密码</span>${icon.chev}</a>
@@ -667,11 +721,18 @@
     cnyPerUsd = cfg.cny_per_usd || cnyPerUsd;
     if (!cfg.enabled) return pageShell('充值', '<section class="card"><p>充值暂未开放，请联系客服。</p></section>', '#/account');
     const names = { alipay: '支付宝', wxpay: '微信支付', qqpay: 'QQ 钱包' };
+    const list = cfg.packages || [];
+    const want = (location.hash.match(/pkg=(\w+)/) || [])[1] || (list.find(p => p.hot) || list[0] || {}).id;
+    let first = 0;
+    try { first = (await api('GET', '/recharge/bonus')).first_bonus || 0; } catch { /* 忽略 */ }
     pageShell('充值', `
+      ${first ? `<p class="invite-chip wide">${icon.gift}<span>你是受邀用户，首次充值额外多送 <b>${first}%</b></span></p>` : ''}
       <section class="card">
-        <p class="label">选择金额</p>
-        <div class="amounts" id="amounts">${cfg.amounts.map((a, i) => `<button type="button" class="amount ${i === 1 ? 'on' : ''}" data-a="${a}">¥${a}</button>`).join('')}</div>
-        <label class="field">其他金额<input id="customAmt" type="number" inputmode="decimal" min="${cfg.min}" max="${cfg.max}" placeholder="${cfg.min} - ${cfg.max}"></label>
+        <p class="label">选择套餐</p>
+        <div class="pkgs grid" id="amounts">${list.length
+          ? list.map((p, i) => pkgCard(p, i, true)).join('')
+          : cfg.amounts.map((a, i) => `<button type="button" class="amount ${i === 1 ? 'on' : ''}" data-a="${a}">¥${a}</button>`).join('')}</div>
+        <label class="field">其他金额（不参加赠送）<input id="customAmt" type="number" inputmode="decimal" min="${cfg.min}" max="${cfg.max}" placeholder="${cfg.min} - ${cfg.max}"></label>
       </section>
       <section class="card">
         <p class="label">支付方式</p>
@@ -685,17 +746,20 @@
       box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
       if (cls === 'amount') $('#customAmt').value = '';
     });
+    $('#amounts').querySelectorAll('[data-pkg]').forEach(b => b.classList.toggle('on', b.dataset.pkg === want));
     pickOne($('#amounts'), 'amount'); pickOne($('#methods'), 'method');
     $('#customAmt').addEventListener('input', () => $('#amounts').querySelectorAll('button').forEach(x => x.classList.remove('on')));
 
     $('#payBtn').onclick = async () => {
       const custom = $('#customAmt').value;
-      const amount = Number(custom || ($('#amounts .on') && $('#amounts .on').dataset.a));
+      const sel = $('#amounts .on');
+      const pkg = !custom && sel && sel.dataset.pkg;
+      const amount = Number(custom || (sel && sel.dataset.a));
       const method = $('#methods .on') && $('#methods .on').dataset.m;
-      if (!amount) return toast('请选择金额', 'warn');
+      if (!pkg && !amount) return toast('请选择套餐或金额', 'warn');
       const btn = $('#payBtn'); btn.disabled = true;
       try {
-        const o = await api('POST', '/recharge', { amount, method });
+        const o = await api('POST', '/recharge', pkg ? { package: pkg, method } : { amount, method });
         const w = window.open(o.pay_url, '_blank');
         if (!w) location.href = o.pay_url;
         $('#payStatus').textContent = '已打开支付页面，付款完成后回到这里，会自动到账…';
@@ -743,9 +807,78 @@
     try {
       const r = await api('GET', '/recharge/orders');
       $('.page-body').innerHTML = `<section class="card list">${r.items.map((o, n) => `
-        <div class="usage-row" data-css="--i:${n}"><div><b>¥${esc(o.amount_cny)}</b><small>${new Date(o.created_at).toLocaleString()}</small></div>
+        <div class="usage-row" data-css="--i:${n}"><div><b>¥${esc(o.amount_cny)}${o.bonus_usd > 0 ? ` <em class="plus">+¥${(o.bonus_usd * cnyPerUsd).toFixed(2)} 赠送</em>` : ''}</b><small>${new Date(o.created_at).toLocaleString()}</small></div>
         <div class="right"><span class="tag ${o.status}">${st[o.status] || o.status}</span></div></div>`).join('') || '<p class="muted center pad">还没有充值记录</p>'}</section>`;
     } catch (e) { toast(e.message, 'err'); }
+  }
+
+  // 价格表（游客也能看）
+  async function viewPricing() {
+    pageShell('价格表', `<p class="muted center pad">${wavebars}</p>`, token ? '#/account' : '#/chat');
+    let d;
+    try { d = await api('GET', '/pricing'); } catch (e) { $('.page-body').innerHTML = `<p class="muted center pad">${esc(e.message)}</p>`; return; }
+    const f = v => (v == null ? '—' : v < 1 ? v.toFixed(3) : v.toFixed(2));
+    const rows = d.models.map((m, i) => `
+      <div class="price-row" data-css="--i:${i}">
+        <b>${esc(m.model)}</b>
+        ${m.per_request != null ? `<span class="pr-one">¥${f(m.per_request)} / 次</span>`
+          : m.input == null ? '<span class="pr-one muted">按实际用量</span>'
+          : `<span><small>输入</small>¥${f(m.input)}</span><span><small>输出</small>¥${f(m.output)}</span>`}
+      </div>`).join('');
+    const img = d.image && (d.image.note || d.image.per_image != null)
+      ? `<section class="card price-img">${icon.image}<div><b>AI 生图</b><small>${esc(d.image.note || `每张约 ¥${f(d.image.per_image)}`)}</small></div></section>` : '';
+    $('.page-body').innerHTML = `
+      <section class="price-hero"><h2 class="serif">用多少，付多少</h2><p>没有月费，不会过期。下面是每 <b>百万 tokens</b> 的价格（约 50～75 万汉字）。</p></section>
+      <section class="card list price-list">
+        <div class="price-row head"><b>模型</b><span>输入</span><span>输出</span></div>
+        ${rows || '<p class="muted center pad">暂时没有可用模型</p>'}
+      </section>
+      ${img}
+      ${token ? pkgStrip(false) : ''}
+      <p class="muted tiny center">实际扣费以「使用记录」为准。一次普通对话通常只要几分钱。</p>`;
+  }
+
+  // 邀请好友
+  async function viewInvite() {
+    pageShell('邀请好友', `<p class="muted center pad">${wavebars}</p>`, '#/account');
+    let d;
+    try { d = await api('GET', '/invite'); } catch (e) { return toast(e.message, 'err'); }
+    const rate = d.cny_per_usd || cnyPerUsd;
+    $('.page-body').innerHTML = `
+      <section class="invite-hero">
+        ${tide('bal-tide')}
+        <p class="muted">我的邀请码</p>
+        <p class="code" id="invCode">${esc(d.code)}</p>
+        <div class="inv-actions">
+          <button class="btn primary pill" id="invShare">${icon.share}分享邀请链接</button>
+          <button class="btn pill ghost-light" id="invCopy">${icon.copy}复制邀请码</button>
+        </div>
+      </section>
+      <section class="inv-stats">
+        <div><b id="invN">${d.invited}</b><small>已邀请</small></div>
+        <div><b>${d.paid}</b><small>已充值</small></div>
+        <div><b>¥<span id="invE">0.00</span></b><small>累计返利</small></div>
+      </section>
+      <section class="card steps">
+        <h2>怎么拿奖励</h2>
+        <ol>
+          <li><b>分享</b><span>把邀请链接或邀请码发给朋友</span></li>
+          <li><b>注册</b><span>朋友用你的链接注册，或注册时填你的邀请码${d.invitee_bonus > 0 ? `，首次充值多送 ${d.invitee_bonus}%` : ''}</span></li>
+          <li><b>返利</b><span>朋友以后每次充值，你都得到 ${d.percent}% 的额度，自动到账</span></li>
+        </ol>
+      </section>
+      <p class="muted tiny center">返利以充值实付金额计算，不含赠送部分。</p>`;
+    countUp($('#invE'), d.earned_usd * rate, v => v.toFixed(2));
+    const copy = async (text, ok) => {
+      try { await navigator.clipboard.writeText(text); toast(ok, 'ok'); }
+      catch { prompt('长按复制', text); }
+    };
+    $('#invCopy').onclick = () => copy(d.code, '邀请码已复制');
+    $('#invShare').onclick = async () => {
+      const text = `我在用星枢 API，ChatGPT 级别的 AI 对话和生图，按量付费。用我的链接注册${d.invitee_bonus > 0 ? `，首充多送 ${d.invitee_bonus}%` : ''}：${d.link}`;
+      if (navigator.share) { try { await navigator.share({ title: '星枢 API', text, url: d.link }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
+      copy(text, '邀请链接已复制，发给朋友吧');
+    };
   }
 
   function viewPassword() {
@@ -776,7 +909,8 @@
       if (h === '#/register') return viewAuth('register');
       if (h === '#/login') return viewAuth('login');
       if (h.startsWith('#/image')) return viewImage();
-      if (/^#\/(account|recharge|usage|orders|password)/.test(h)) return go('#/login');
+      if (h.startsWith('#/pricing')) return viewPricing();
+      if (/^#\/(account|recharge|usage|orders|password|invite)/.test(h)) return go('#/register');
       return viewChat();
     }
     if (!me) {
@@ -788,6 +922,8 @@
     if (h.startsWith('#/usage')) return viewUsage();
     if (h.startsWith('#/orders')) return viewOrders();
     if (h.startsWith('#/password')) return viewPassword();
+    if (h.startsWith('#/pricing')) return viewPricing();
+    if (h.startsWith('#/invite')) return viewInvite();
     if (h === '#/login' || h === '#/register') return go('#/chat');
     return viewChat();
   }

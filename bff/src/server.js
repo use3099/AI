@@ -183,13 +183,55 @@ async function creditOrder(no) {
   } catch (e) {
     db.prepare('UPDATE orders SET last_error = ? WHERE no = ?').run(String(e.message).slice(0, 500), no);
     log('充值到账失败，稍后重试', no, e.message);
+    return;
   }
+  // 邀请奖励：按好友实付金额对应的额度（不含赠送部分）给邀请人返 REFERRAL_PERCENT%
+  if (user.inviter_id && config.referral.percent > 0) {
+    const base = Number(order.credit_usd) - Number(order.bonus_usd || 0);
+    const amount = Math.round(base * config.referral.percent / 100 * 1e6) / 1e6;
+    if (amount > 0) {
+      db.prepare('INSERT OR IGNORE INTO referral_rewards (order_no, inviter_id, invitee_id, amount_usd, created_at) VALUES (?, ?, ?, ?, ?)')
+        .run(order.no, user.inviter_id, user.id, amount, Date.now());
+      await payReward(order.no);
+    }
+  }
+}
+
+async function payReward(no) {
+  const r = db.prepare("SELECT * FROM referral_rewards WHERE order_no = ? AND status = 'pending'").get(no);
+  if (!r) return;
+  const inviter = db.prepare('SELECT * FROM users WHERE id = ?').get(r.inviter_id);
+  try {
+    if (!inviter || !inviter.s2_user_id) throw new Error('邀请人未开通');
+    await s2.addBalance(inviter.s2_user_id, r.amount_usd, `邀请奖励：好友 #${r.invitee_id} 充值 ${no}`, `bff-ref-${no}`);
+    db.prepare("UPDATE referral_rewards SET status = 'credited', credited_at = ?, last_error = NULL WHERE order_no = ?").run(Date.now(), no);
+    log('邀请奖励到账', no, `inviter=${r.inviter_id}`, `+$${r.amount_usd}`);
+  } catch (e) {
+    db.prepare('UPDATE referral_rewards SET last_error = ? WHERE order_no = ?').run(String(e.message).slice(0, 500), no);
+    log('邀请奖励到账失败，稍后重试', no, e.message);
+  }
+}
+
+// 邀请码：6 位，去掉容易看错的字符
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function inviteCode(user) {
+  if (user.invite_code) return user.invite_code;
+  for (let i = 0; i < 20; i++) {
+    const code = Array.from(crypto.randomBytes(6), b => CODE_CHARS[b % CODE_CHARS.length]).join('');
+    try {
+      db.prepare('UPDATE users SET invite_code = ? WHERE id = ? AND invite_code IS NULL').run(code, user.id);
+      return db.prepare('SELECT invite_code FROM users WHERE id = ?').get(user.id).invite_code;
+    } catch { /* 撞码了，重来 */ }
+  }
+  throw new HttpError(500, '生成邀请码失败');
 }
 
 // 每分钟重试一次 12 小时内付款但还没到账的订单（Idempotency-Key 保证不会重复加钱）
 setInterval(() => {
   const rows = db.prepare("SELECT no FROM orders WHERE status = 'paid' AND paid_at > ?").all(Date.now() - 12 * 3600 * 1000);
   for (const r of rows) creditOrder(r.no);
+  const refs = db.prepare("SELECT order_no FROM referral_rewards WHERE status = 'pending' AND created_at > ?").all(Date.now() - 7 * 86400 * 1000);
+  for (const r of refs) payReward(r.order_no);
 }, 60000).unref();
 
 // ───────── 路由 ─────────
@@ -206,7 +248,9 @@ route('GET', '/api/config', async () => ({
     min: config.rechargeMin,
     max: config.rechargeMax,
     cny_per_usd: config.cnyPerUsd,
+    packages: config.packages,
   },
+  referral: { percent: config.referral.percent, invitee_bonus: config.referral.inviteeBonus },
   image: { enabled: !!config.image.groupId, price_note: config.image.priceNote, sizes: IMAGE_SIZES },
 }));
 
@@ -218,8 +262,10 @@ route('POST', '/api/auth/register', async (req) => {
   if (password.length < 8 || password.length > 128) throw new HttpError(400, '密码至少 8 位');
   if (db.prepare('SELECT 1 FROM users WHERE account = ?').get(account)) throw new HttpError(409, '该账号已注册，请直接登录');
 
-  const info = db.prepare('INSERT INTO users (account, pass_hash, created_at) VALUES (?, ?, ?)')
-    .run(account, hashPassword(password), Date.now());
+  const code = String(body.invite || '').trim().toUpperCase().slice(0, 16);
+  const inviter = code ? db.prepare("SELECT id FROM users WHERE invite_code = ? AND status = 'active'").get(code) : null;
+  const info = db.prepare('INSERT INTO users (account, pass_hash, inviter_id, created_at) VALUES (?, ?, ?, ?)')
+    .run(account, hashPassword(password), inviter ? inviter.id : null, Date.now());
   let user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
   try {
     user = await provision(user);
@@ -282,11 +328,11 @@ function anyUserKey() {
   const row = db.prepare("SELECT s2_key_enc FROM users WHERE s2_key_enc IS NOT NULL AND status = 'active' ORDER BY id DESC LIMIT 1").get();
   return row ? decrypt(row.s2_key_enc) : null;
 }
-route('GET', '/api/models', async (req) => {
-  const user = req.headers.authorization ? auth(req) : null;
-  if (Date.now() - modelsCache.at < 5 * 60 * 1000 && modelsCache.list.length) return { models: modelsCache.list };
+route('GET', '/api/models', async (req) => ({ models: await listModels(req.headers.authorization ? auth(req) : null) }));
+async function listModels(user) {
+  if (Date.now() - modelsCache.at < 5 * 60 * 1000 && modelsCache.list.length) return modelsCache.list;
   const key = user ? userKey(user) : anyUserKey();
-  if (!key) return { models: config.allowedModels };
+  if (!key) return config.allowedModels;
   const r = await s2.gateway('GET', '/models', key, undefined, AbortSignal.timeout(15000));
   if (!r.ok) throw new HttpError(502, '获取模型列表失败');
   const j = await r.json();
@@ -294,8 +340,8 @@ route('GET', '/api/models', async (req) => {
   if (config.allowedModels.length) ids = ids.filter(id => config.allowedModels.includes(id));
   ids = [...new Set(ids)].sort();
   modelsCache = { at: Date.now(), list: ids };
-  return { models: ids };
-});
+  return ids;
+}
 
 const CHAT_FIELDS = ['model', 'messages', 'temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stream', 'reasoning_effort'];
 
@@ -431,34 +477,117 @@ route('GET', '/api/usage', async (req, res, url) => {
   return { items, total: data.total || 0, page, pages: data.pages || 1 };
 });
 
+// 这笔充值能多送多少（百分比）：套餐赠送 + 被邀请用户首充赠送
+function rechargeBonus(user, pkg) {
+  let pct = pkg ? pkg.bonus : 0;
+  if (user.inviter_id && config.referral.inviteeBonus > 0) {
+    const paidBefore = db.prepare("SELECT 1 FROM orders WHERE user_id = ? AND status IN ('paid', 'credited') LIMIT 1").get(user.id);
+    if (!paidBefore) pct += config.referral.inviteeBonus;
+  }
+  return pct;
+}
+
+route('GET', '/api/recharge/bonus', async (req) => {
+  const user = auth(req);
+  const first = user.inviter_id && config.referral.inviteeBonus > 0 &&
+    !db.prepare("SELECT 1 FROM orders WHERE user_id = ? AND status IN ('paid', 'credited') LIMIT 1").get(user.id);
+  return { first_bonus: first ? config.referral.inviteeBonus : 0 };
+});
+
+// 邀请好友
+route('GET', '/api/invite', async (req) => {
+  const user = auth(req);
+  const code = inviteCode(user);
+  const invited = db.prepare('SELECT COUNT(*) AS n FROM users WHERE inviter_id = ?').get(user.id).n;
+  const paid = db.prepare('SELECT COUNT(DISTINCT invitee_id) AS n FROM referral_rewards WHERE inviter_id = ?').get(user.id).n;
+  const earned = db.prepare("SELECT COALESCE(SUM(amount_usd), 0) AS s FROM referral_rewards WHERE inviter_id = ? AND status = 'credited'").get(user.id).s;
+  return {
+    code,
+    link: `${config.publicUrl}${config.basePath}/?ref=${code}`,
+    percent: config.referral.percent,
+    invitee_bonus: config.referral.inviteeBonus,
+    invited, paid,
+    earned_usd: Math.round(earned * 1e6) / 1e6,
+    cny_per_usd: config.cnyPerUsd,
+  };
+});
+
+// 价格表：sub2api 的模型默认单价 × 分组倍率（分组里单独定了价就用分组的），换算成「元 / 百万 tokens」
+let pricingCache = { at: 0, data: null };
+const perM = v => (v == null ? null : Number(v) < 0.01 ? Number(v) * 1e6 : Number(v)); // 兼容按 token 和按百万 token 两种写法
+async function buildPricing() {
+  const models = await listModels(null);
+  const rate = cny => (cny == null ? null : Math.round(cny * config.cnyPerUsd * 100) / 100);
+  let group = null;
+  if (config.sub2api.groupId) { try { group = await s2.getGroup(config.sub2api.groupId); } catch (e) { log('读分组倍率失败', e.message); } }
+  const mult = group && Number(group.rate_multiplier) > 0 ? Number(group.rate_multiplier) : 1;
+  const custom = (group && Array.isArray(group.model_pricing) ? group.model_pricing : []);
+  const rows = await Promise.all(models.map(async m => {
+    const c = custom.find(x => Array.isArray(x.models) && x.models.includes(m));
+    if (c && (c.input_price != null || c.output_price != null || c.per_request_price != null)) {
+      return { model: m, input: rate(perM(c.input_price)), output: rate(perM(c.output_price)), per_request: c.per_request_price != null ? rate(Number(c.per_request_price)) : null };
+    }
+    try {
+      const p = await s2.modelPricing(m);
+      if (!p || !p.found) return { model: m, input: null, output: null };
+      return { model: m, input: rate(p.input_price * 1e6 * mult), output: rate(p.output_price * 1e6 * mult) };
+    } catch { return { model: m, input: null, output: null }; }
+  }));
+  let image = null;
+  if (config.image.groupId) {
+    image = { note: config.image.priceNote || '' };
+    if (!image.note) {
+      try {
+        const g = await s2.getGroup(config.image.groupId);
+        const m = g.image_rate_independent && Number(g.image_rate_multiplier) > 0 ? Number(g.image_rate_multiplier) : (Number(g.rate_multiplier) > 0 ? Number(g.rate_multiplier) : 1);
+        if (g.image_price_1k != null) image.per_image = rate(Number(g.image_price_1k) * m);
+      } catch (e) { log('读生图分组失败', e.message); }
+    }
+  }
+  return { unit: '元 / 百万 tokens', models: rows, image, cny_per_usd: config.cnyPerUsd };
+}
+route('GET', '/api/pricing', async () => {
+  if (pricingCache.data && Date.now() - pricingCache.at < 30 * 60 * 1000) return pricingCache.data;
+  const data = await buildPricing();
+  if (data.models.length) pricingCache = { at: Date.now(), data };
+  return data;
+});
+
 // 充值
 route('POST', '/api/recharge', async (req) => {
   const user = auth(req);
   if (!config.epay.enabled) throw new HttpError(503, '充值暂未开放');
   rateLimit('order:' + user.id, 10, 10 * 60 * 1000);
   const body = await readJson(req);
-  const amount = Number(body.amount);
-  if (!Number.isFinite(amount) || amount < config.rechargeMin || amount > config.rechargeMax) {
+  const pkg = body.package ? config.packages.find(p => p.id === String(body.package)) : null;
+  if (body.package && !pkg) throw new HttpError(400, '套餐不存在，请刷新后重试');
+  const amount = pkg ? pkg.price : Number(body.amount);
+  if (!pkg && (!Number.isFinite(amount) || amount < config.rechargeMin || amount > config.rechargeMax)) {
     throw new HttpError(400, `充值金额需在 ¥${config.rechargeMin} - ¥${config.rechargeMax} 之间`);
   }
   const method = String(body.method || '');
   if (!config.epay.methods.includes(method)) throw new HttpError(400, '不支持的支付方式');
   const amountStr = money(amount);
-  const credit = Math.round((Number(amountStr) / config.cnyPerUsd) * 1e6) / 1e6;
+  const base = Number(amountStr) / config.cnyPerUsd;
+  const bonusPct = rechargeBonus(user, pkg);
+  const round6 = n => Math.round(n * 1e6) / 1e6;
+  const bonus = round6(base * bonusPct / 100);
+  const credit = round6(base + bonus);
   const no = `XS${Date.now()}${crypto.randomInt(1000, 9999)}`;
-  db.prepare('INSERT INTO orders (no, user_id, amount_cny, credit_usd, method, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(no, user.id, amountStr, credit, method, Date.now());
+  db.prepare('INSERT INTO orders (no, user_id, amount_cny, credit_usd, bonus_usd, package_id, method, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(no, user.id, amountStr, credit, bonus, pkg ? pkg.id : null, method, Date.now());
   return {
     order_no: no,
     amount_cny: amountStr,
     credit_usd: credit,
+    bonus_percent: bonusPct,
     pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API 充值 ¥${amountStr}` }),
   };
 });
 
 route('GET', '/api/recharge/orders', async (req) => {
   const user = auth(req);
-  const rows = db.prepare('SELECT no, amount_cny, credit_usd, method, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id);
+  const rows = db.prepare('SELECT no, amount_cny, credit_usd, bonus_usd, package_id, method, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id);
   return { items: rows };
 });
 

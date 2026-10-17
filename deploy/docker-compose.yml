@@ -118,6 +118,9 @@ services:
       - SUB2API_IMAGE_GROUP_ID=${SUB2API_IMAGE_GROUP_ID:-}
       - IMAGE_MODELS=${IMAGE_MODELS:-}
       - IMAGE_PRICE_NOTE=${IMAGE_PRICE_NOTE:-}
+      - PACKAGES=${PACKAGES:-}
+      - REFERRAL_PERCENT=${REFERRAL_PERCENT:-10}
+      - REFERRAL_INVITEE_BONUS=${REFERRAL_INVITEE_BONUS:-10}
       - TZ=${TZ:-Asia/Shanghai}
     depends_on:
       - sub2api

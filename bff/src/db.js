@@ -42,4 +42,27 @@ CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 const cols = db.prepare('PRAGMA table_info(users)').all().map(c => c.name);
 if (!cols.includes('s2_img_key_enc')) db.exec('ALTER TABLE users ADD COLUMN s2_img_key_enc TEXT');
 
+if (!cols.includes('invite_code')) db.exec('ALTER TABLE users ADD COLUMN invite_code TEXT');
+if (!cols.includes('inviter_id')) db.exec('ALTER TABLE users ADD COLUMN inviter_id INTEGER');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite ON users(invite_code)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_users_inviter ON users(inviter_id)');
+const ocols = db.prepare('PRAGMA table_info(orders)').all().map(c => c.name);
+if (!ocols.includes('package_id')) db.exec('ALTER TABLE orders ADD COLUMN package_id TEXT');
+if (!ocols.includes('bonus_usd')) db.exec('ALTER TABLE orders ADD COLUMN bonus_usd REAL NOT NULL DEFAULT 0');
+
+// 邀请奖励：每笔被邀请人的充值订单最多奖励一次（order_no 唯一）
+db.exec(`
+CREATE TABLE IF NOT EXISTS referral_rewards (
+  order_no    TEXT PRIMARY KEY,
+  inviter_id  INTEGER NOT NULL,
+  invitee_id  INTEGER NOT NULL,
+  amount_usd  REAL NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending',   -- pending → credited
+  last_error  TEXT,
+  created_at  INTEGER NOT NULL,
+  credited_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_ref_inviter ON referral_rewards(inviter_id);
+`);
+
 module.exports = db;

@@ -21,6 +21,15 @@ function list(name, def) {
   return v.split(',').map(s => s.trim()).filter(Boolean);
 }
 
+function parsePackages(v) {
+  return String(v).split(',').map(s => s.trim()).filter(Boolean).map((s, i) => {
+    const [name, price, bonus, flag] = s.split(':').map(x => (x || '').trim());
+    const p = Number(price), b = Number(bonus || 0);
+    if (!name || !(p > 0) || !(b >= 0)) throw new Error(`PACKAGES 格式不对: ${s}（应为 名称:价格:赠送百分比[:hot]）`);
+    return { id: String(i + 1), name, price: p, bonus: b, hot: flag === 'hot' };
+  });
+}
+
 const config = {
   port: num('PORT', 8787),
   basePath: (env.BASE_PATH ?? '/app').replace(/\/+$/, ''),   // 对外路径前缀
@@ -60,6 +69,13 @@ const config = {
     models: list('IMAGE_MODELS', []),                        // 留空 = 生图分组里有什么就给什么
     priceNote: (env.IMAGE_PRICE_NOTE || '').trim(),          // App 里显示的价格说明，例如「每张约 ¥0.05」
     perMinute: num('IMAGE_PER_MINUTE', 6),
+  },
+  // 套餐推荐：名称:价格(元):赠送百分比[:hot]，逗号分隔。hot 的那个显示「推荐」
+  packages: parsePackages(env.PACKAGES || '入门:10:0,常用:50:5,超值:100:10:hot,畅享:300:15'),
+  // 邀请奖励：好友每次充值，邀请人得到到账额度的 REFERRAL_PERCENT%；好友首次充值额外多送 REFERRAL_INVITEE_BONUS%
+  referral: {
+    percent: num('REFERRAL_PERCENT', 10),
+    inviteeBonus: num('REFERRAL_INVITEE_BONUS', 10),
   },
   trustProxy: (env.TRUST_PROXY || 'true') === 'true',
 };
