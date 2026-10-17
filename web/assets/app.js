@@ -111,35 +111,69 @@
   async function pageLanding(el) {
     document.title = brandName();
     const loggedIn = !!auth.token;
+    const webApp = SITE.webApp === undefined ? '/app/' : SITE.webApp;
+    const dl = SITE.downloads || {};
+    const apps = [
+      webApp && !C.inApp ? { href: webApp, name: t('dl.web'), meta: t('dl.webMeta'), main: true, open: true } : null,
+      dl.android ? { href: dl.android, name: 'Android', meta: t('land.app.apk') } : null,
+      dl.windows ? { href: dl.windows, name: 'Windows', meta: t('land.app.exe') } : null,
+      dl.mac ? { href: dl.mac, name: 'macOS', meta: t('land.app.dmg') } : null,
+    ].filter(Boolean);
     el.innerHTML = `
       <div class="landing">
         <header class="topbar">
           <a class="brand" href="#/">${logo()}<span>${esc(brandName())}</span></a>
+          <nav class="topnav" aria-label="${t('nav.main')}">
+            <a href="#/pricing">${t('land.allPrices')}</a>
+            ${C.inApp ? '' : `<a href="#/download">${t('nav.download')}</a>`}
+          </nav>
           <div class="row">
             ${langSelect('lang-top')}
             ${loggedIn ? `<a class="btn sm" href="#/dashboard">${t('nav.console')}</a>`
-              : `<a class="btn plain" href="#/login">${t('land.login')}</a><a class="btn sm" href="#/register">${t('land.start')}</a>`}
+              : `<a class="btn plain" href="#/login">${t('land.login')}</a>${webApp && !C.inApp ? `<a class="btn sm dark" href="${esc(webApp)}">${t('land.web')}</a>` : ''}`}
           </div>
         </header>
         <section class="hero">
           <div class="hero-copy">
-            <h1>${esc(t('land.title')).replace('\n', '<br>')}</h1>
-            <p>${esc(t('land.sub'))}</p>
-            <div class="endpoint" title="${t('land.endpoint')}"><span class="muted">${t('land.endpoint')}</span><b>${esc(apiUrl())}</b>
+            <h1 class="serif">${revealTitle(t('land.title'))}</h1>
+            <p class="rise" style="--d:1">${esc(t('land.sub'))}</p>
+            <div class="endpoint rise" style="--d:2" title="${t('land.endpoint')}"><span class="muted">${t('land.endpoint')}</span><b>${esc(apiUrl())}</b>
               <button class="iconbtn" id="copy-ep" aria-label="${t('c.copy')}">${icon('copy', 18)}</button></div>
-            <div class="hero-cta">
+            <div class="hero-cta rise" style="--d:3">
               ${loggedIn ? `<a class="btn" href="#/dashboard">${t('nav.console')}</a>` : `<a class="btn" href="#/register">${t('land.start')}</a>`}
               <a class="btn ghost" href="#/pricing">${t('land.allPrices')}</a>
             </div>
           </div>
-          <div class="switchboard" id="board" aria-hidden="true"></div>
+          <div class="confluence" id="board"></div>
         </section>
         <section class="facts">
           <div class="fact"><h3>${t('land.f1.t')}</h3><p>${t('land.f1.p')}</p></div>
           <div class="fact"><h3>${t('land.f2.t')}</h3><p>${t('land.f2.p')}</p></div>
           <div class="fact"><h3>${t('land.f3.t')}</h3><p>${t('land.f3.p')}</p></div>
         </section>
+        <section class="dev">
+          <div class="dev-in">
+            <div>
+              <h2 class="serif">${esc(t('land.dev.t')).replace('\n', '<br>')}</h2>
+              <p>${esc(t('land.dev.p'))}</p>
+              ${loggedIn ? `<a class="btn outline-light" href="#/keys">${t('land.dev.keys')}</a>` : `<a class="btn outline-light" href="#/register">${t('land.start')}</a>`}
+            </div>
+            <div class="code-win"><div class="code-bar"><i></i><i></i><i></i></div>
+<pre><span class="k">from</span> openai <span class="k">import</span> OpenAI
+
+client = OpenAI(
+    base_url=<span class="s">"${esc(apiUrl())}"</span>,
+    api_key=<span class="s">"sk-…"</span>,
+)
+client.chat.completions.create(
+    model=<span class="s">"gpt-6-sol"</span>,
+    messages=[{<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"${esc(t('land.dev.hello'))}"</span>}],
+)</pre></div>
+          </div>
+        </section>
         <section class="price-strip" id="price-strip"></section>
+        ${apps.length ? `<section class="apps"><h2 class="serif">${t('land.apps')}</h2>
+          <div class="app-grid">${apps.map(a => `<a class="app-tile${a.main ? ' main' : ''}" href="${esc(a.href)}"${a.open ? '' : ' download'}><b>${esc(a.name)}</b><span>${esc(a.meta)}</span></a>`).join('')}</div></section>` : ''}
         <footer class="footer">© ${new Date().getFullYear()} ${esc(brandName())}${C.inApp ? '' : ` · <a href="#/download">${t('nav.download')}</a>`}</footer>
       </div>`;
     bindLang('lang-top');
@@ -157,40 +191,48 @@
         <div class="panel table-wrap"><table class="t"><thead><tr><th>${t('bill.model')}</th><th class="num">${t('price.in')}</th><th class="num">${t('price.out')}</th></tr></thead>
         <tbody>${rows.map((r) => `<tr><td class="mono">${esc(r.name)}</td>${r.perCall != null ? `<td class="num" colspan="2">${C.fmtUsd(r.perCall)} / ${t('price.per')}</td>` : `<td class="num">${C.fmtUsd(r.inp)}</td><td class="num">${C.fmtUsd(r.out)}</td>`}</tr>`).join('')}</tbody></table></div>`;
     }
-    drawBoard($('#board', el), models.length ? models : ['claude', 'gpt', 'gemini', 'deepseek']);
+    drawConfluence($('#board', el), models.length ? models : ['claude', 'gpt', 'gemini', 'deepseek']);
   }
 
-  // 首页线路图：多个模型的线汇入中枢，再接到用户的一个 Key
-  function drawBoard(box, models) {
+  // 标题逐字浮现：中文按字，英文按词内的字母（词不拆行，空格保留）
+  function revealTitle(text) {
+    let d = 0;
+    return text.split('\n').map(line => line.split(/(\s+)/).map(part => {
+      if (!part) return '';
+      if (/^\s+$/.test(part)) return ' ';
+      return `<span class="w">${[...part].map(ch => `<span class="ch" style="--d:${d++}">${esc(ch)}</span>`).join('')}</span>`;
+    }).join('')).join('<br>');
+  }
+
+  // 首页主视觉「潮线汇流」：十几条发丝细线从左侧散开，汇入一个光点，再接到用户的一个 Key。
+  // 带模型名的线上会依次有一束光流过去。
+  function drawConfluence(box, models) {
     if (!box) return;
-    const W = 560, H = 500, n = Math.min(models.length, 6);
-    const hub = { x: 330, y: 250 };
-    const tags = models.slice(0, n).map((m, i) => ({ name: m.length > 20 ? m.slice(0, 19) + '…' : m, x: 18, y: 50 + i * ((H - 100) / Math.max(n - 1, 1)) }));
-    const wires = tags.map((tg, i) => `<path id="w${i}" class="wire" d="M${tg.x + 168} ${tg.y} C ${tg.x + 250} ${tg.y}, ${hub.x - 90} ${hub.y}, ${hub.x - 26} ${hub.y}"/>`).join('');
-    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img">
-      ${wires}
-      <path class="wire live" d="M${hub.x + 26} ${hub.y} H ${W - 150}"/>
-      ${tags.map((tg, i) => `<g class="tag" id="t${i}"><rect x="${tg.x}" y="${tg.y - 17}" width="168" height="34" rx="9"/><text x="${tg.x + 14}" y="${tg.y + 5}">${esc(tg.name)}</text></g>`).join('')}
-      <g class="hub"><circle class="ring" cx="${hub.x}" cy="${hub.y}" r="26"/><circle cx="${hub.x}" cy="${hub.y}" r="8" fill="var(--jade)"/></g>
-      <g class="client"><rect x="${W - 150}" y="${hub.y - 34}" width="148" height="68" rx="12"/>
-        <text x="${W - 136}" y="${hub.y - 8}">base_url=/v1</text><text x="${W - 136}" y="${hub.y + 16}">api_key=sk-•••</text></g>
-      <circle class="pulse" r="5" id="pulse"><animateMotion id="am" dur="1.6s" repeatCount="1" fill="freeze"><mpath href="#w0"/></animateMotion></circle>
+    const W = 1000, H = 560, hx = 800, hy = 280, N = 13;
+    const labeled = [1, 4, 6, 8, 11, 2].slice(0, Math.min(models.length, 6)).sort((a, b) => a - b);
+    const lines = [];
+    for (let i = 0; i < N; i++) {
+      const y0 = 30 + (H - 60) * (i / (N - 1));
+      let d = '';
+      for (let x = 0; x <= hx; x += 16) {
+        const k = Math.pow(1 - x / hx, 1.5);
+        const y = hy + (y0 - hy) * k + 14 * Math.sin(x / 90 + i * 0.7) * k;
+        d += `${x ? 'L' : 'M'}${x} ${y.toFixed(1)}`;
+      }
+      lines.push({ d, y0 });
+    }
+    const tags = labeled.map((li, n) => ({ li, name: (models[n] || '').length > 18 ? models[n].slice(0, 17) + '…' : models[n] }));
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t('land.board'))}">
+      <defs><radialGradient id="glow"><stop offset="0" stop-color="var(--jade)" stop-opacity=".35"/><stop offset="1" stop-color="var(--jade)" stop-opacity="0"/></radialGradient></defs>
+      <g class="strands">${lines.map((l, i) => `<path class="strand${labeled.includes(i) ? ' named' : ''}" d="${l.d}" style="--i:${i}" pathLength="1000"/>`).join('')}</g>
+      <g class="flows">${tags.map((tg, n) => `<path class="flow" d="${lines[tg.li].d}" pathLength="1000" style="--n:${n};--c:${tags.length}"/>`).join('')}</g>
+      <path class="out" d="M${hx} ${hy} H${W - 34}" pathLength="1000"/>
+      <circle class="halo" cx="${hx}" cy="${hy}" r="64" fill="url(#glow)"/>
+      <circle class="hub" cx="${hx}" cy="${hy}" r="11"/>
+      <circle class="tip" cx="${W - 28}" cy="${hy}" r="6"/>
+      <text class="key" x="${hx}" y="${hy + 62}" text-anchor="middle">${esc(t('land.yourKey'))}</text>
+      ${tags.map((tg, n) => { const y = lines[tg.li].y0; const w = 32 + tg.name.length * 12.6; return `<g class="tag" style="--n:${n}"><rect x="2" y="${y - 21}" width="${w}" height="42" rx="21"/><text x="${2 + w / 2}" y="${y + 7}" text-anchor="middle">${esc(tg.name)}</text></g>`; }).join('')}
     </svg>`;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { box.querySelector('#w0').classList.add('live'); box.querySelector('#t0').classList.add('live'); return; }
-    let i = 0;
-    const svg = box.querySelector('svg');
-    const step = () => {
-      if (!document.body.contains(svg)) return;
-      $$('.wire', svg).forEach((w, k) => { if (k < n) w.classList.toggle('live', k === i); });
-      $$('.tag', svg).forEach((g, k) => g.classList.toggle('live', k === i));
-      const mp = svg.querySelector('mpath');
-      mp.setAttribute('href', '#w' + i);
-      const am = svg.querySelector('#am');
-      try { am.beginElement(); } catch (e) {}
-      i = (i + 1) % n;
-      setTimeout(step, 2400);
-    };
-    step();
   }
 
   // =====================================================================

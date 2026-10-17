@@ -1,4 +1,5 @@
 // 星枢 API App：只和本域名下的 BFF（./api/*）通信
+// 界面「潮线」：logo 里的细线化成缓慢流动的发丝线，汇聚成一个光点
 (function () {
   'use strict';
   const $ = (sel, el = document) => el.querySelector(sel);
@@ -47,38 +48,77 @@
 
   const go = h => { if (location.hash !== h) location.hash = h; else render(); };
   const yuan = usd => (usd == null ? '--' : '¥' + (usd * cnyPerUsd).toFixed(2));
+  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+  // 安全策略不允许内联 style 属性：模板里写 data-css="--i:3;width:16px"，这里用 DOM 接口设上（策略允许）
+  function applyCss(root) {
+    const els = root.matches && root.matches('[data-css]') ? [root] : [];
+    if (root.querySelectorAll) els.push(...root.querySelectorAll('[data-css]'));
+    for (const el of els) {
+      for (const decl of el.getAttribute('data-css').split(';')) {
+        const i = decl.indexOf(':'); if (i > 0) el.style.setProperty(decl.slice(0, i).trim(), decl.slice(i + 1).trim());
+      }
+      el.removeAttribute('data-css');
+    }
+  }
+  new MutationObserver(list => { for (const m of list) for (const n of m.addedNodes) if (n.nodeType === 1) applyCss(n); })
+    .observe(document.body, { childList: true, subtree: true });
+  const initial = () => (me ? String(me.user.account).trim().charAt(0).toUpperCase() : '');
+
+  const svg = (d, extra = '') => `<svg viewBox="0 0 24 24" aria-hidden="true" ${extra}>${d}</svg>`;
   const icon = {
-    menu: '<svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
-    plus: '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
-    send: '<svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
-    stop: '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>',
-    user: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 19c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/></svg>',
-    back: '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>',
-    close: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
-    trash: '<svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/></svg>',
-    image: '<svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9.5" cy="10" r="1.6"/><path d="M5 17l4.5-4.5 3.5 3.5 2.5-2.5L20 18"/></svg>',
-    chat: '<svg viewBox="0 0 24 24"><path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7a2.5 2.5 0 0 1-2.5 2.5H11l-4 3.5V16h0a2 2 0 0 1-2-2z"/></svg>',
+    menu: svg('<path d="M4 8h16M4 16h10"/>'),
+    plus: svg('<path d="M12 5v14M5 12h14"/>'),
+    up: svg('<path d="M12 19V5M6 11l6-6 6 6"/>'),
+    stop: svg('<rect x="6" y="6" width="12" height="12" rx="3" fill="currentColor" stroke="none"/>'),
+    back: svg('<path d="M15 5l-7 7 7 7"/>'),
+    close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
+    trash: svg('<path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12"/>'),
+    chev: svg('<path d="M9 6l6 6-6 6"/>'),
+    down: svg('<path d="M7 10l5 5 5-5"/>'),
+    copy: svg('<rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
+    mail: svg('<path d="M4 6h16v12H4zM4 7l8 6 8-6"/>'),
+    spark: svg('<path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M19 15l.8 2.2 2.2.8-2.2.8L19 21l-.8-2.2-2.2-.8 2.2-.8z"/>'),
+    globe: svg('<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.5 2.6 2.5 13.4 0 16M12 4c-2.5 2.6-2.5 13.4 0 16"/>'),
+    image: svg('<rect x="4" y="5" width="16" height="14" rx="2.5"/><circle cx="9.5" cy="10" r="1.5"/><path d="M5 17l4.5-4.5 3.5 3.5 2.5-2.5L20 18"/>'),
+    chart: svg('<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>'),
+    card: svg('<rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18M7 15h4"/>'),
+    lock: svg('<rect x="5" y="10" width="14" height="10" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'),
+    bubble: svg('<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>'),
   };
   const imageOn = () => !!(appCfg && appCfg.image && appCfg.image.enabled);
-  const logo = '<img class="logo" src="icon.svg" alt="">';
 
-  // ── 潮汐波纹：三层正弦波，宽度是画面的两倍，向左平移一半即可无缝循环 ──
-  function wavePath(amp, period, base, phase) {
-    const W = 2880, H = 180;
-    let d = `M0 ${H} L0 ${base}`;
-    for (let x = 0; x <= W; x += 24) d += ` L${x} ${(base + amp * Math.sin((x / period) * Math.PI * 2 + phase)).toFixed(1)}`;
-    return d + ` L${W} ${H} Z`;
+  // 品牌标志：三条线汇入一个光点
+  const mark = (cls = '') => `<svg class="mark ${cls}" viewBox="0 0 64 64" aria-hidden="true">
+    <rect width="64" height="64" rx="18" class="mark-bg"/>
+    <path d="M13 19c12 0 14 13 21 13M13 32h21M13 45c12 0 14-13 21-13" class="mark-lines"/>
+    <path d="M34 32h16" class="mark-out"/><circle cx="34" cy="32" r="4.8" class="mark-node"/><circle cx="51" cy="32" r="2.6" class="mark-tip"/></svg>`;
+
+  // ── 潮线：发丝细线，宽度为画面两倍，向左平移一半即可无缝循环；其中一条青色线上有光点流过 ──
+  const TIDE_W = 780, TIDE_H = 220;
+  function linePath(i, n) {
+    const t = i / (n - 1), base = 36 + 150 * t, amp = 6 + 10 * Math.sin(t * Math.PI), ph = i * 0.55;
+    let d = '';
+    for (let x = 0; x <= TIDE_W * 2; x += 12) d += `${x ? 'L' : 'M'}${x} ${(base + amp * Math.sin((x / 260) * Math.PI * 2 + ph)).toFixed(1)}`;
+    return d;
   }
-  const WAVES = [[18, 720, 70, 0], [14, 480, 92, 1.4], [10, 360, 112, 2.6]]
-    .map(([a, p, b, ph], i) => `<svg class="w${i + 1}" viewBox="0 0 2880 180" preserveAspectRatio="none" aria-hidden="true"><path d="${wavePath(a, p, b, ph)}"/></svg>`).join('');
-  const tide = (cls = '') => `<div class="tide ${cls}" aria-hidden="true">${WAVES}</div>`;
+  const N_LINES = 9, SIGNAL = 3;
+  const TIDE_PATHS = Array.from({ length: N_LINES }, (_, i) => linePath(i, N_LINES));
+  const tide = (cls = '') => `<div class="tide ${cls}" aria-hidden="true"><svg viewBox="0 0 ${TIDE_W * 2} ${TIDE_H}" preserveAspectRatio="none">
+    ${TIDE_PATHS.map((d, i) => `<path d="${d}" class="${i === SIGNAL ? 'sig' : 'ln'}" data-css="--i:${i};--o:${(0.25 + 0.4 * Math.sin((i / (N_LINES - 1)) * Math.PI)).toFixed(2)}"/>`).join('')}
+    <path d="${TIDE_PATHS[SIGNAL]}" class="pulse"/></svg></div>`;
   const wavebars = '<span class="wavebars" aria-label="正在生成"><i></i><i></i><i></i><i></i><i></i></span>';
-  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 逐字浮现（标题）
+  const reveal = text => text.split('\n').map(line => [...line].map((ch, i) => `<span class="ch" data-css="--d:${i}">${esc(ch)}</span>`).join('')).join('<br>');
+  function greeting() {
+    const h = new Date().getHours();
+    return h < 5 ? '夜深了' : h < 11 ? '早上好' : h < 13 ? '中午好' : h < 18 ? '下午好' : '晚上好';
+  }
 
   // 按下时的涟漪
   document.addEventListener('pointerdown', e => {
-    const el = e.target.closest('.btn, .send, .amount, .method, .icon-btn');
+    const el = e.target.closest('.btn, .send, .seg a, .ratio, .method, .amount');
     if (!el || el.disabled || reduceMotion()) return;
     const r = el.getBoundingClientRect();
     const dot = document.createElement('span');
@@ -91,9 +131,9 @@
   // 数字滚动到目标值
   function countUp(el, to, fmt) {
     if (!el || to == null || reduceMotion()) { if (el) el.textContent = fmt(to); return; }
-    const start = performance.now(), dur = 900;
+    const start = performance.now(), dur = 1100;
     const step = now => {
-      const t = Math.min(1, (now - start) / dur), k = 1 - Math.pow(1 - t, 3);
+      const t = Math.min(1, (now - start) / dur), k = 1 - Math.pow(1 - t, 4);
       el.textContent = fmt(to * k);
       if (t < 1) requestAnimationFrame(step);
     };
@@ -102,18 +142,21 @@
 
   // ───────── 登录 / 注册 ─────────
   function authCard(isReg, inModal, reason) {
+    const pending = sessionStorage.getItem('xs_pending') || sessionStorage.getItem('xs_img_pending');
     const sw = inModal
-      ? (isReg ? '已有账号？<button type="button" class="linkish" data-switch="login">去登录</button>' : '还没有账号？<button type="button" class="linkish" data-switch="register">注册一个</button>')
-      : (isReg ? '已有账号？<a href="#/login">去登录</a>' : '还没有账号？<a href="#/register">注册一个</a>');
+      ? (isReg ? '已有账号？<button type="button" class="linkish" data-switch="login">登录</button>' : '还没有账号？<button type="button" class="linkish" data-switch="register">注册</button>')
+      : (isReg ? '已有账号？<a href="#/login">登录</a>' : '还没有账号？<a href="#/register">注册</a>');
+    const cta = isReg ? (pending && inModal ? '注册并发送' : '注册并开始使用') : (pending && inModal ? '登录并发送' : '登录');
     return `
         <div class="auth-card">
-          ${inModal ? `<button type="button" class="icon-btn modal-close" aria-label="关闭">${icon.close}</button>` : ''}
-          <div class="brand">${logo}<div><h1>${isReg ? '注册星枢 API' : '登录星枢 API'}</h1><p>${esc(reason || '聊天、写作、生成图片，一个账号就够')}</p></div></div>
+          ${inModal ? `<span class="grab" aria-hidden="true"></span><button type="button" class="icon-btn modal-close" aria-label="关闭">${icon.close}</button>` : mark('auth-mark')}
+          <h1 class="serif auth-title">${isReg ? '创建账号' : '欢迎回来'}</h1>
+          <p class="muted auth-sub">${esc(reason || (isReg ? '聊天、写作、生成图片，一个账号就够' : '登录后继续你的对话'))}</p>
+          ${pending && inModal ? `<div class="pending-q">${icon.bubble}<p>${esc(pending)}</p></div>` : ''}
           <form class="authForm" novalidate>
-            <label>邮箱或手机号<input name="account" autocomplete="username" inputmode="email" required></label>
-            <label>密码<input name="password" type="password" autocomplete="${isReg ? 'new-password' : 'current-password'}" minlength="8" required></label>
-            ${isReg ? '<label>确认密码<input name="password2" type="password" autocomplete="new-password" required></label>' : ''}
-            <button class="btn primary block" type="submit">${isReg ? '注册并开始使用' : '登录'}</button>
+            <label class="field">邮箱或手机号<input name="account" autocomplete="username" inputmode="email" required></label>
+            <label class="field">${isReg ? '设置密码' : '密码'}<input name="password" type="password" autocomplete="${isReg ? 'new-password' : 'current-password'}" minlength="8" placeholder="${isReg ? '至少 8 位' : ''}" required></label>
+            <button class="btn primary block" type="submit" data-label="${cta}">${cta}</button>
           </form>
           <p class="switch">${sw}</p>
         </div>`;
@@ -128,15 +171,14 @@
       const password = f.password.value;
       if (!account || !password) return toast('请填写账号和密码', 'warn');
       if (isReg && password.length < 8) return toast('密码至少 8 位', 'warn');
-      if (isReg && password !== f.password2.value) return toast('两次密码不一致', 'warn');
-      btn.disabled = true; btn.textContent = '请稍候…';
+      btn.disabled = true; btn.innerHTML = wavebars;
       try {
         const r = await api('POST', `/auth/${isReg ? 'register' : 'login'}`, { account, password });
         token = r.token; store.set('xs_token', token); me = null;
         onDone();
       } catch (err) {
         toast(err.message, 'err');
-        btn.disabled = false; btn.textContent = isReg ? '注册并开始使用' : '登录';
+        btn.disabled = false; btn.textContent = btn.dataset.label;
       }
     });
   }
@@ -144,31 +186,42 @@
   // 整页登录 / 注册（直接打开 #/login、#/register 时）
   function viewAuth(mode) {
     const isReg = mode === 'register';
-    app.innerHTML = `<main class="auth">${tide()}${authCard(isReg, false)}</main>`;
+    app.innerHTML = `<main class="auth"><a class="icon-btn auth-back" href="#/chat" aria-label="返回">${icon.back}</a>${authCard(isReg, false)}${tide('auth-tide')}</main>`;
     bindAuth(app, isReg, () => go('#/chat'));
   }
 
   // 弹窗登录 / 注册：游客发消息、生图时弹出，登录后留在原页面
   function openAuth(mode = 'register', reason = '') {
-    closeAuth();
+    closeAuth(true);
     const wrap = document.createElement('div');
     wrap.className = 'modal';
     wrap.id = 'authModal';
     const paint = m => {
       const isReg = m === 'register';
       wrap.innerHTML = authCard(isReg, true, reason);
-      bindAuth(wrap, isReg, () => { closeAuth(); toast(isReg ? '注册成功，开始吧' : '登录成功', 'ok'); render(); });
+      bindAuth(wrap, isReg, () => { closeAuth(true); toast(isReg ? '注册成功' : '登录成功', 'ok'); render(); });
       const first = $('input', wrap); if (first && window.matchMedia('(pointer: fine)').matches) first.focus();
     };
     wrap.addEventListener('click', e => {
-      if (e.target === wrap || e.target.closest('.modal-close')) { sessionStorage.removeItem('xs_pending'); closeAuth(); return; }
+      if (e.target === wrap || e.target.closest('.modal-close')) { sessionStorage.removeItem('xs_pending'); sessionStorage.removeItem('xs_img_pending'); closeAuth(); return; }
       const sw = e.target.closest('[data-switch]'); if (sw) paint(sw.dataset.switch);
     });
     document.body.appendChild(wrap);
     paint(mode);
   }
-  function closeAuth() { const m = $('#authModal'); if (m) m.remove(); }
+  function closeAuth(now) {
+    const m = $('#authModal'); if (!m) return;
+    if (now || reduceMotion()) return m.remove();
+    m.classList.add('leaving');
+    setTimeout(() => m.remove(), 260);
+  }
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAuth(); });
+
+  // 账号按钮（右上角）
+  const accountBtn = () => me
+    ? `<a class="avatar" href="#/account" aria-label="我的">${esc(initial())}</a>`
+    : '<button type="button" class="btn pill-outline" data-login>登录</button>';
+  app.addEventListener('click', e => { if (e.target.closest('[data-login]')) openAuth('login'); });
 
   // ───────── 对话 ─────────
   const convKey = () => `xs_convs_${me ? me.user.id : 0}`;
@@ -189,35 +242,40 @@
     return c;
   }
 
+  const HINTS = [
+    { icon: 'mail', text: '帮我写一封请假邮件' },
+    { icon: 'spark', text: '用三句话解释量子计算' },
+    { icon: 'globe', text: '把这段话翻译成英文' },
+    { icon: 'image', text: '画一张雨夜东京街头的图', image: '雨夜的东京街头，霓虹倒映在积水里，电影感' },
+  ];
+
   async function viewChat() {
     convs = store.get(convKey(), []);
     if (!current || !convs.find(c => c.id === current.id)) current = convs[0] || null;
     app.innerHTML = `
       <div class="chat-layout">
         <aside class="sidebar" id="sidebar">
-          <div class="side-head">${logo}<strong>星枢 API</strong></div>
-          <div class="side-nav" style="${imageOn() ? '' : 'grid-template-columns:1fr'}">
-            <button class="btn primary" id="newChat">${icon.plus}新对话</button>
-            ${imageOn() ? `<a class="btn" href="#/image">${icon.image}AI 生图</a>` : ''}
-          </div>
-          <nav class="conv-list" id="convList"></nav>
-          ${me ? `<a class="side-account" href="#/account">${icon.user}<span><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>`
-               : `<button type="button" class="side-account guest" id="guestLogin">${icon.user}<span><b>登录 / 注册</b><small>注册后就能开始对话</small></span></button>`}
+          <div class="side-head">${mark()}<strong>星枢 API</strong></div>
+          <button class="btn dark side-btn" id="newChat">${icon.plus}新对话</button>
+          ${imageOn() ? `<a class="side-link" href="#/image">${icon.image}AI 生图</a>` : ''}
+          <nav class="conv-list" id="convList" aria-label="历史对话"></nav>
+          ${me ? `<a class="side-account" href="#/account"><span class="avatar sm">${esc(initial())}</span><span class="who"><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>`
+               : `<button type="button" class="side-account guest" data-login><span class="avatar sm ghost">${svg('<circle cx="12" cy="8.5" r="3.5"/><path d="M5 19c1.2-3.2 3.8-4.8 7-4.8s5.8 1.6 7 4.8"/>')}</span><span class="who"><b>登录 / 注册</b><small>注册后就能开始对话</small></span></button>`}
         </aside>
         <div class="scrim" id="scrim"></div>
         <section class="chat-main">
           <header class="chat-head">
-            <button class="icon-btn only-mobile" id="openSide" aria-label="对话列表">${icon.menu}</button>
-            <select id="modelSel" aria-label="选择模型"></select>
-            ${imageOn() ? `<a class="icon-btn" href="#/image" aria-label="AI 生图">${icon.image}</a>` : ''}
-            ${me ? `<a class="icon-btn" href="#/account" aria-label="我的">${icon.user}</a>` : '<button type="button" class="btn sm-login" id="headLogin">登录</button>'}
+            <button class="icon-btn only-mobile" id="openSide" aria-label="打开对话列表">${icon.menu}</button>
+            <label class="model-pill"><span class="dot"></span><span class="sr">选择模型</span><select id="modelSel"></select>${icon.down}</label>
+            ${accountBtn()}
           </header>
-          <div class="tideline" id="tideline"></div>
+          <div class="streamline" id="streamline"></div>
           ${tide('chat-tide')}
           <div class="messages" id="messages"></div>
           <form class="composer" id="composer">
-            <textarea id="input" rows="1" placeholder="输入消息…" enterkeyhint="send"></textarea>
-            <button class="send" id="sendBtn" type="submit" aria-label="发送">${icon.send}</button>
+            <label class="sr" for="input">消息</label>
+            <textarea id="input" rows="1" placeholder="给星枢发消息" enterkeyhint="send"></textarea>
+            <button class="send" id="sendBtn" type="submit" aria-label="发送">${icon.up}</button>
           </form>
         </section>
       </div>`;
@@ -226,16 +284,13 @@
     const closeSide = () => { sidebar.classList.remove('open'); scrim.classList.remove('show'); };
     $('#openSide').onclick = () => { sidebar.classList.add('open'); scrim.classList.add('show'); };
     scrim.onclick = closeSide;
-    if (!me) {
-      $('#guestLogin').onclick = () => openAuth('register');
-      $('#headLogin').onclick = () => openAuth('login');
-    }
     $('#newChat').onclick = () => { newConv(); renderConvList(); renderMessages(); closeSide(); $('#input').focus(); };
 
     const sel = $('#modelSel');
     try {
       if (!models.length) models = (await api('GET', '/models')).models;
     } catch (e) { toast(e.message, 'err'); }
+    if (!$('#modelSel')) return; // 已离开页面
     sel.innerHTML = models.length ? models.map(m => `<option>${esc(m)}</option>`).join('') : `<option value="">${me ? '暂无可用模型' : '登录后选择模型'}</option>`;
     const pick = (current && current.model) || store.get('xs_model', models[0] || '');
     if (models.includes(pick)) sel.value = pick;
@@ -243,10 +298,21 @@
 
     function renderConvList() {
       const list = $('#convList');
-      list.innerHTML = convs.length ? convs.map((c, i) => `
-        <div class="conv ${current && c.id === current.id ? 'active' : ''}" data-id="${c.id}" style="--i:${Math.min(i, 12)}">
-          <span>${esc(c.title)}</span><button class="del" data-del="${c.id}" aria-label="删除">${icon.trash}</button>
-        </div>`).join('') : '<p class="muted small pad">还没有对话</p>';
+      if (!convs.length) { list.innerHTML = '<p class="conv-empty">还没有对话</p>'; return; }
+      const day = 86400000, now = new Date(); now.setHours(0, 0, 0, 0);
+      const groups = [['今天', c => c.at >= now.getTime()], ['近 7 天', c => c.at >= now.getTime() - 6 * day], ['更早', () => true]];
+      const seen = new Set();
+      let html = '', n = 0;
+      for (const [label, test] of groups) {
+        const items = convs.filter(c => !seen.has(c.id) && test(c));
+        if (!items.length) continue;
+        items.forEach(c => seen.add(c.id));
+        html += `<p class="conv-group">${label}</p>` + items.map(c => `
+          <div class="conv ${current && c.id === current.id ? 'active' : ''}" data-id="${c.id}" data-css="--i:${Math.min(n++, 14)}">
+            <span>${esc(c.title)}</span><button class="del" data-del="${c.id}" aria-label="删除">${icon.trash}</button>
+          </div>`).join('');
+      }
+      list.innerHTML = html;
       list.onclick = e => {
         const del = e.target.closest('[data-del]');
         if (del) {
@@ -267,11 +333,11 @@
     function msgHtml(m, i) {
       const enter = i >= animateFrom ? ' enter' : '';
       if (m.role === 'user') return `<div class="msg user${enter}"><div class="bubble">${esc(m.content).replace(/\n/g, '<br>')}</div></div>`;
-      const cls = (m.error ? 'msg bot error' : 'msg bot') + enter;
-      return `<div class="${cls}"><div class="bubble md">${m.content ? window.renderMarkdown(m.content) : wavebars}</div></div>`;
+      const done = m.content && !(streaming && i === current.messages.length - 1);
+      return `<div class="msg bot${m.error ? ' error' : ''}${enter}">${mark('msg-mark')}
+        <div class="bot-body"><div class="bubble md">${m.content ? window.renderMarkdown(m.content) : wavebars}</div>
+        ${done && !m.error ? `<div class="msg-actions"><button class="icon-btn" data-copymsg="${i}" aria-label="复制">${icon.copy}</button></div>` : ''}</div></div>`;
     }
-
-    const HINTS = ['帮我写一封请假邮件', '用三句话解释量子计算', '把这段话翻译成英文', '给我的小店起 5 个名字'];
 
     function renderMessages() {
       const box = $('#messages');
@@ -279,8 +345,12 @@
       const empty = !current || !current.messages.length;
       main.classList.toggle('is-empty', empty);
       if (empty) {
-        box.innerHTML = `<div class="empty">${logo}<h2>今天想聊点什么？</h2><p class="muted">选好上方的模型，直接输入问题即可。</p>
-          <div class="hints">${HINTS.map((h, i) => `<button type="button" class="hint" style="--i:${i}">${h}</button>`).join('')}</div></div>`;
+        const hints = HINTS.filter(h => !h.image || imageOn());
+        box.innerHTML = `<div class="empty">${mark('hero-mark')}
+          <h1 class="serif greet">${reveal(`${greeting()}，\n今天想聊点什么？`)}</h1>
+          <p class="muted lead">Claude、GPT 和更多模型，一个账号就能用</p>
+          <div class="hints">${hints.map((h, i) => `<button type="button" class="hint" data-css="--i:${i}" data-hint="${i}">${icon[h.icon]}<span>${h.text}</span>${icon.chev}</button>`).join('')}</div></div>`;
+        box.onclickHints = hints;
         return;
       }
       box.innerHTML = current.messages.map(msgHtml).join('');
@@ -289,8 +359,18 @@
     }
 
     $('#messages').addEventListener('click', e => {
-      const hint = e.target.closest('.hint');
-      if (hint) { input.value = hint.textContent; autosize(); input.focus(); return; }
+      const hint = e.target.closest('[data-hint]');
+      if (hint) {
+        const h = $('#messages').onclickHints[+hint.dataset.hint];
+        if (h.image) { sessionStorage.setItem('xs_img_prefill', h.image); return go('#/image'); }
+        input.value = h.text; autosize(); input.focus(); return;
+      }
+      const cm = e.target.closest('[data-copymsg]');
+      if (cm) {
+        const m = current.messages[+cm.dataset.copymsg];
+        navigator.clipboard?.writeText(m.content).then(() => toast('已复制'), () => toast('复制失败', 'err'));
+        return;
+      }
       const b = e.target.closest('[data-copy]');
       if (!b) return;
       const code = b.closest('.codeblock').querySelector('code').textContent;
@@ -313,7 +393,7 @@
       if (!text) return;
       if (!me) {
         sessionStorage.setItem('xs_pending', text);
-        return openAuth('register', '注册后就能收到回复，刚才的问题会自动发送');
+        return openAuth('register', '注册后就能收到回复，刚才的问题会自动发送。');
       }
       if (!sel.value) return toast('暂无可用模型', 'warn');
       if (!current) newConv();
@@ -325,16 +405,16 @@
       current.messages.push(reply);
       current.at = Date.now();
       input.value = ''; autosize();
-      saveConvs(); renderConvList(); renderMessages();
-      await streamReply(current, reply);
+      saveConvs(); renderConvList();
+      streaming = new AbortController();
+      renderMessages();
+      await streamReply(current, reply, streaming);
     });
 
-    async function streamReply(conv, reply) {
-      const ctrl = new AbortController();
-      streaming = ctrl;
+    async function streamReply(conv, reply, ctrl) {
       const btn = $('#sendBtn');
-      btn.innerHTML = icon.stop; btn.classList.add('stop'); btn.setAttribute('aria-label', '停止');
-      $('#tideline').classList.add('flowing');
+      btn.innerHTML = icon.stop; btn.classList.add('stop'); btn.setAttribute('aria-label', '停止生成');
+      $('#streamline').classList.add('flowing');
       const box = $('#messages');
       const node = () => box.lastElementChild && box.lastElementChild.querySelector('.bubble');
       let pending = false;
@@ -389,16 +469,16 @@
           if (!reply.content) reply.content = '（已停止）';
         } else {
           reply.error = true;
-          reply.content = (reply.content ? reply.content + '\n\n' : '') + `⚠️ ${err.message}` + (err.status === 402 ? '\n\n[去充值](#/recharge)' : '');
+          reply.content = (reply.content ? reply.content + '\n\n' : '') + `${err.message}` + (err.status === 402 ? '\n\n[去充值](#/recharge)' : '');
           if (err.status === 402) toast('余额不足，请先充值', 'warn');
         }
       } finally {
         streaming = null;
         saveConvs();
-        if ($('#tideline')) $('#tideline').classList.remove('flowing');
+        if ($('#streamline')) $('#streamline').classList.remove('flowing');
         if (conv === current && $('#sendBtn')) {
           renderMessages();
-          const b = $('#sendBtn'); b.innerHTML = icon.send; b.classList.remove('stop'); b.setAttribute('aria-label', '发送');
+          const b = $('#sendBtn'); b.innerHTML = icon.up; b.classList.remove('stop'); b.setAttribute('aria-label', '发送');
         }
         refreshBalance();
       }
@@ -434,21 +514,32 @@
   const imgKey = () => `xs_imgs_${me ? me.user.id : 0}`;
   let imgModels = [];
   let imgBusy = false;
+  const RATIOS = [['1024x1024', '方图 1:1', 16, 16], ['1024x1536', '竖图 2:3', 13, 19], ['1536x1024', '横图 3:2', 19, 13]];
 
   async function viewImage() {
     if (!imageOn()) return pageShell('AI 生图', '<section class="card"><p>生图功能暂未开放，请联系客服。</p></section>');
-    const sizes = { '1024x1024': '方图 1:1', '1024x1536': '竖图 2:3', '1536x1024': '横图 3:2' };
     const note = appCfg.image.price_note;
-    pageShell('AI 生图', `
-      <section class="card">
-        <label>模型<select id="imgModel"><option value="">加载中…</option></select></label>
-        <p class="muted small">尺寸</p>
-        <div class="amounts" id="imgSize">${Object.entries(sizes).map(([v, n], i) => `<button type="button" class="amount ${i === 0 ? 'on' : ''}" data-s="${v}">${n}</button>`).join('')}</div>
-        <label class="custom">描述你想要的画面<textarea id="imgPrompt" rows="4" maxlength="4000" placeholder="例如：雨夜的东京街头，霓虹灯倒映在积水里，电影感"></textarea></label>
-        <button class="btn primary block" id="imgGo">${icon.image}生成图片</button>
-        <p class="muted small center">${note ? esc(note) + ' · ' : ''}按张计费，从余额扣除${me ? ' · 余额 ' + yuan(me.balance_usd) : ''}</p>
-      </section>
-      <div id="imgResults" class="img-results"></div>`);
+    app.innerHTML = `
+      <div class="page image-page">
+        <header class="page-head">
+          <a class="icon-btn" href="#/chat" aria-label="返回对话">${icon.back}</a>
+          <nav class="seg" aria-label="功能切换"><a href="#/chat">对话</a><a href="#/image" aria-current="page">生图</a></nav>
+          ${accountBtn()}
+        </header>
+        <main class="page-body">
+          <div id="imgResults" class="img-results"></div>
+          <form class="card img-form" id="imgForm">
+            <label class="field bare">描述画面<textarea id="imgPrompt" rows="3" maxlength="4000" placeholder="例如：雨夜的东京街头，霓虹倒映在积水里，电影感"></textarea></label>
+            <div class="hair"></div>
+            <div class="img-opts">
+              <div class="ratios" role="radiogroup" aria-label="画面比例">${RATIOS.map(([v, n, w, h], i) => `<button type="button" class="ratio ${i === 0 ? 'on' : ''}" role="radio" aria-checked="${i === 0}" aria-label="${n}" data-s="${v}"><span data-css="width:${w}px;height:${h}px"></span></button>`).join('')}</div>
+              <label class="model-pill small"><span class="sr">生图模型</span><select id="imgModel"><option value="">加载中…</option></select>${icon.down}</label>
+            </div>
+            <button class="btn dark block lg" id="imgGo" type="submit">${icon.spark}生成图片</button>
+            <p class="muted tiny center">${note ? esc(note) + '，' : ''}按张计费，从余额扣除${me ? `（余额 ${yuan(me.balance_usd)}）` : ''}</p>
+          </form>
+        </main>
+      </div>`;
 
     const sel = $('#imgModel');
     if (me) { try { if (!imgModels.length) imgModels = (await api('GET', '/image/models')).models; } catch (e) { toast(e.message, 'err'); } }
@@ -459,22 +550,28 @@
     if (imgModels.includes(saved)) sel.value = saved;
     sel.onchange = () => store.set('xs_img_model', sel.value);
 
-    const sizeBox = $('#imgSize');
-    sizeBox.addEventListener('click', e => {
-      const b = e.target.closest('button'); if (!b) return;
-      sizeBox.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    const ratioBox = $('.ratios');
+    ratioBox.addEventListener('click', e => {
+      const b = e.target.closest('.ratio'); if (!b) return;
+      ratioBox.querySelectorAll('.ratio').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-checked', x === b); });
     });
 
     let items = store.get(imgKey(), []);
+    let timer = null;
     const renderResults = () => {
       const box = $('#imgResults'); if (!box) return;
-      box.innerHTML = items.map((it, i) => `
-        <figure class="card img-card">
-          ${it.pending ? `<div class="img-wait">${tide()}${wavebars}<small>正在生成，通常需要 10-60 秒…</small></div>`
-            : it.error ? `<div class="img-wait error"><small>⚠️ ${esc(it.error)}${/余额不足/.test(it.error) ? ' <a href="#/recharge">去充值</a>' : ''}</small></div>`
-            : `<img src="${it.src}" alt="${esc(it.prompt)}">`}
-          <figcaption><span>${esc(it.prompt)}</span>${it.src ? `<a class="btn ghost" href="${it.src}" download="xingshu-${it.at}.png">保存</a>` : ''}<button class="icon-btn" data-del="${i}" aria-label="删除">${icon.trash}</button></figcaption>
-        </figure>`).join('') + (items.some(x => x.src) ? '<p class="muted small center">手机上也可以长按图片保存到相册</p>' : '');
+      box.innerHTML = items.map((it, i) => it.pending ? `
+        <figure class="img-card pending">
+          ${tide('img-tide')}
+          <figcaption><div><b>正在生成</b><small>${esc(it.prompt)}</small></div><span class="secs" id="imgSecs">0 秒</span></figcaption>
+          <div class="bar"><i id="imgBar"></i></div>
+        </figure>` : it.error ? `
+        <figure class="img-card failed"><p>${esc(it.error)}${/余额不足/.test(it.error) ? ' <a href="#/recharge">去充值</a>' : ''}</p>
+          <button class="icon-btn" data-del="${i}" aria-label="删除">${icon.trash}</button></figure>` : `
+        <figure class="img-card">
+          <img src="${it.src}" alt="${esc(it.prompt)}">
+          <figcaption><span>${esc(it.prompt)}</span><a class="btn ghost sm" href="${it.src}" download="xingshu-${it.at}.png">保存</a><button class="icon-btn" data-del="${i}" aria-label="删除">${icon.trash}</button></figcaption>
+        </figure>`).join('') + (items.some(x => x.src) ? '<p class="muted tiny center">手机上也可以长按图片保存到相册</p>' : '');
     };
     const persist = () => {
       // 图片很大，只在本机保留最近 6 张
@@ -488,32 +585,44 @@
       items.splice(+d.dataset.del, 1); persist(); renderResults();
     });
     renderResults();
-    const pendingPrompt = me && sessionStorage.getItem('xs_img_pending');
-    if (pendingPrompt) { sessionStorage.removeItem('xs_img_pending'); $('#imgPrompt').value = pendingPrompt; }
+    const prefill = sessionStorage.getItem('xs_img_prefill') || (me && sessionStorage.getItem('xs_img_pending'));
+    if (prefill) { sessionStorage.removeItem('xs_img_prefill'); if (me) sessionStorage.removeItem('xs_img_pending'); $('#imgPrompt').value = prefill; }
 
-    $('#imgGo').onclick = async () => {
+    $('#imgForm').addEventListener('submit', async e => {
+      e.preventDefault();
       if (imgBusy) return toast('上一张还在生成，请稍等', 'warn');
       const prompt = $('#imgPrompt').value.trim();
       if (!prompt) return toast('请先描述画面', 'warn');
-      if (!me) { sessionStorage.setItem('xs_img_pending', prompt); return openAuth('register', '注册后就能生成图片'); }
+      if (!me) { sessionStorage.setItem('xs_img_pending', prompt); return openAuth('register', '注册后就能生成图片。'); }
       if (!sel.value) return toast('暂无可用模型', 'warn');
-      const size = $('#imgSize .on').dataset.s;
+      const size = $('.ratio.on').dataset.s;
       const it = { prompt, pending: true, at: Date.now() };
       items.unshift(it); renderResults();
+      window.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' });
       imgBusy = true; $('#imgGo').disabled = true;
+      // 进度条：按 40 秒预估缓慢逼近，返回后补满
+      const t0 = Date.now();
+      clearInterval(timer);
+      timer = setInterval(() => {
+        const s = (Date.now() - t0) / 1000;
+        const secs = $('#imgSecs'), bar = $('#imgBar');
+        if (secs) secs.textContent = `${Math.floor(s)} 秒`;
+        if (bar) bar.style.width = `${(1 - Math.exp(-s / 22)) * 92}%`;
+      }, 250);
       try {
         const r = await api('POST', '/image', { model: sel.value, prompt, size });
         it.src = r.images[0];
-      } catch (e) {
-        it.error = e.message;
-        if (/余额不足/.test(e.message)) toast('余额不足，请先充值', 'warn');
+      } catch (err) {
+        it.error = err.message;
+        if (/余额不足/.test(err.message)) toast('余额不足，请先充值', 'warn');
       } finally {
+        clearInterval(timer);
         delete it.pending; imgBusy = false;
         persist(); renderResults();
         const b = $('#imgGo'); if (b) b.disabled = false;
         refreshBalance();
       }
-    };
+    });
   }
 
   // ───────── 我的 ─────────
@@ -528,23 +637,22 @@
   async function viewAccount() {
     await refreshBalance();
     pageShell('我的', `
-      <section class="card balance-card">
-        ${tide()}
+      <section class="balance">
+        ${tide('bal-tide')}
         <p class="muted">账户余额</p>
-        <p class="big" id="bigBal">${yuan(0)}</p>
-        <a class="btn primary" href="#/recharge">充值</a>
+        <p class="big"><span class="cur">¥</span><span id="bigBal">0.00</span></p>
+        <a class="btn primary pill" href="#/recharge">充值</a>
       </section>
-      <section class="card list">
-        <a href="#/usage">使用记录<span>›</span></a>
-        <a href="#/orders">充值记录<span>›</span></a>
-        <a href="#/password">修改密码<span>›</span></a>
-      </section>
-      <section class="card list">
-        <div class="row"><span class="muted">账号</span><span>${esc(me.user.account)}</span></div>
-      </section>
-      <button class="btn block ghost danger" id="logout">退出登录</button>
-      <button class="btn block ghost" id="logoutAll">退出所有设备</button>`);
-    countUp($('#bigBal'), me.balance_usd, v => yuan(v));
+      <nav class="card list" aria-label="账户">
+        <a href="#/usage">${icon.chart}<span>使用记录</span>${icon.chev}</a>
+        <a href="#/orders">${icon.card}<span>充值记录</span>${icon.chev}</a>
+        <a href="#/password">${icon.lock}<span>修改密码</span>${icon.chev}</a>
+      </nav>
+      <div class="kv"><span class="muted">登录账号</span><span>${esc(me.user.account)}</span></div>
+      <div class="grow"></div>
+      <button class="btn block quiet danger" id="logout">退出登录</button>
+      <button class="btn block quiet" id="logoutAll">退出所有设备</button>`);
+    countUp($('#bigBal'), me.balance_usd == null ? null : me.balance_usd * cnyPerUsd, v => (v == null ? '--' : v.toFixed(2)));
     $('#logout').onclick = () => logout();
     $('#logoutAll').onclick = async () => {
       if (!confirm('确定要让所有设备上的登录都失效吗？')) return;
@@ -561,16 +669,16 @@
     const names = { alipay: '支付宝', wxpay: '微信支付', qqpay: 'QQ 钱包' };
     pageShell('充值', `
       <section class="card">
-        <p class="muted">选择金额</p>
+        <p class="label">选择金额</p>
         <div class="amounts" id="amounts">${cfg.amounts.map((a, i) => `<button type="button" class="amount ${i === 1 ? 'on' : ''}" data-a="${a}">¥${a}</button>`).join('')}</div>
-        <label class="custom">其他金额<input id="customAmt" type="number" inputmode="decimal" min="${cfg.min}" max="${cfg.max}" placeholder="${cfg.min} - ${cfg.max}"></label>
+        <label class="field">其他金额<input id="customAmt" type="number" inputmode="decimal" min="${cfg.min}" max="${cfg.max}" placeholder="${cfg.min} - ${cfg.max}"></label>
       </section>
       <section class="card">
-        <p class="muted">支付方式</p>
+        <p class="label">支付方式</p>
         <div class="methods" id="methods">${cfg.methods.map((m, i) => `<button type="button" class="method ${i === 0 ? 'on' : ''}" data-m="${m}">${names[m] || m}</button>`).join('')}</div>
       </section>
-      <button class="btn primary block" id="payBtn">立即支付</button>
-      <p class="muted small center" id="payStatus"></p>`, '#/account');
+      <button class="btn dark block lg" id="payBtn">立即支付</button>
+      <p class="muted tiny center" id="payStatus"></p>`, '#/account');
 
     const pickOne = (box, cls) => box.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
@@ -615,37 +723,37 @@
   }
 
   async function viewUsage(page = 1) {
-    pageShell('使用记录', '<p class="muted center pad">加载中…</p>', '#/account');
+    pageShell('使用记录', `<p class="muted center pad">${wavebars}</p>`, '#/account');
     try {
       const r = await api('GET', `/usage?page=${page}`);
       const rows = r.items.map((i, n) => `
-        <div class="usage-row" style="--i:${n}">
+        <div class="usage-row" data-css="--i:${n}">
           <div><b>${esc(i.model)}</b><small>${new Date(i.time).toLocaleString()}</small></div>
           <div class="right"><b>-¥${(i.cost_usd * cnyPerUsd).toFixed(4)}</b><small>${i.input_tokens} / ${i.output_tokens} tokens</small></div>
         </div>`).join('');
-      $('.page-body').innerHTML = `<section class="card list">${rows || '<p class="muted center pad">暂无记录</p>'}</section>
+      $('.page-body').innerHTML = `<section class="card list">${rows || '<p class="muted center pad">还没有使用记录</p>'}</section>
         <div class="pager">${page > 1 ? `<button class="btn ghost" data-p="${page - 1}">上一页</button>` : ''}${page < r.pages ? `<button class="btn ghost" data-p="${page + 1}">下一页</button>` : ''}</div>`;
       $('.pager').onclick = e => { const b = e.target.closest('[data-p]'); if (b) viewUsage(+b.dataset.p); };
     } catch (e) { toast(e.message, 'err'); }
   }
 
   async function viewOrders() {
-    pageShell('充值记录', '<p class="muted center pad">加载中…</p>', '#/account');
+    pageShell('充值记录', `<p class="muted center pad">${wavebars}</p>`, '#/account');
     const st = { pending: '待支付', paid: '到账中', credited: '已到账' };
     try {
       const r = await api('GET', '/recharge/orders');
-      $('.page-body').innerHTML = `<section class="card list">${r.items.map(o => `
-        <div class="usage-row"><div><b>¥${esc(o.amount_cny)}</b><small>${new Date(o.created_at).toLocaleString()}</small></div>
-        <div class="right"><span class="tag ${o.status}">${st[o.status] || o.status}</span></div></div>`).join('') || '<p class="muted center pad">暂无记录</p>'}</section>`;
+      $('.page-body').innerHTML = `<section class="card list">${r.items.map((o, n) => `
+        <div class="usage-row" data-css="--i:${n}"><div><b>¥${esc(o.amount_cny)}</b><small>${new Date(o.created_at).toLocaleString()}</small></div>
+        <div class="right"><span class="tag ${o.status}">${st[o.status] || o.status}</span></div></div>`).join('') || '<p class="muted center pad">还没有充值记录</p>'}</section>`;
     } catch (e) { toast(e.message, 'err'); }
   }
 
   function viewPassword() {
     pageShell('修改密码', `
       <form class="card form" id="pwForm">
-        <label>原密码<input name="old" type="password" autocomplete="current-password" required></label>
-        <label>新密码<input name="np" type="password" autocomplete="new-password" minlength="8" required></label>
-        <button class="btn primary block" type="submit">保存</button>
+        <label class="field">原密码<input name="old" type="password" autocomplete="current-password" required></label>
+        <label class="field">新密码<input name="np" type="password" autocomplete="new-password" minlength="8" placeholder="至少 8 位" required></label>
+        <button class="btn dark block lg" type="submit">保存新密码</button>
       </form>`, '#/account');
     $('#pwForm').addEventListener('submit', async e => {
       e.preventDefault();
@@ -654,7 +762,7 @@
       try {
         const r = await api('POST', '/auth/password', { old_password: f.old.value, new_password: f.np.value });
         token = r.token; store.set('xs_token', token);
-        toast('密码已修改，其他设备需要重新登录', 'ok'); go('#/account');
+        toast('新密码已保存，其他设备需要重新登录', 'ok'); go('#/account');
       } catch (err) { toast(err.message, 'err'); }
     });
   }

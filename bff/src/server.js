@@ -504,7 +504,7 @@ route('GET', '/pay/return', async (req, res) => {
 }, { raw: true });
 
 // ───────── 静态页面（App 界面） ─────────
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.woff': 'font/woff' };
 const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
 function serveStatic(req, res, p) {
@@ -516,7 +516,7 @@ function serveStatic(req, res, p) {
   const ext = path.extname(target);
   res.writeHead(200, {
     'content-type': MIME[ext] || 'application/octet-stream',
-    'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=300',
+    'cache-control': ext === '.html' ? 'no-cache' : ext.startsWith('.woff') ? 'public, max-age=604800' : 'public, max-age=300',
     'content-security-policy': CSP,
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',

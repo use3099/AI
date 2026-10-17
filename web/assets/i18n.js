@@ -11,6 +11,10 @@
     'land.f2.t': '支付宝、微信直接充值', 'land.f2.p': '充值秒到账，余额永久有效。也支持兑换码。',
     'land.f3.t': '一个 Key 切换任意模型', 'land.f3.p': '在请求里改 model 名称即可，不用为每家厂商单独开户。',
     'land.prices': '部分模型价格', 'land.allPrices': '查看全部模型价格',
+    'nav.main': '主导航', 'land.web': '打开网页版', 'land.board': '多个模型汇聚到你的一个 Key', 'land.yourKey': '你的一个 Key',
+    'land.dev.t': '现有代码，\n改两行就能用', 'land.dev.p': '把 Base URL 换成星枢的地址，填上你的 Key。OpenAI SDK、Anthropic SDK 和常见客户端都不用改别的。',
+    'land.dev.keys': '管理我的 Key', 'land.dev.hello': '你好', 'land.apps': '在哪都能用',
+    'land.app.apk': '下载 APK 安装包', 'land.app.exe': '下载安装程序', 'land.app.dmg': 'Intel 与 Apple 芯片通用',
 
     'auth.login': '登录', 'auth.register': '注册', 'auth.username': '用户名', 'auth.password': '密码',
     'auth.password2': '再次输入密码', 'auth.email': '邮箱', 'auth.code': '邮箱验证码', 'auth.sendCode': '发送验证码',
@@ -91,6 +95,10 @@
     'land.f2.t': '支付寶、微信直接儲值', 'land.f2.p': '儲值秒到帳，餘額永久有效。也支援兌換碼。',
     'land.f3.t': '一個 Key 切換任意模型', 'land.f3.p': '在請求裡改 model 名稱即可，不用為每家廠商單獨開戶。',
     'land.prices': '部分模型價格', 'land.allPrices': '查看全部模型價格',
+    'nav.main': '主導覽', 'land.web': '開啟網頁版', 'land.board': '多個模型匯聚到你的一個 Key', 'land.yourKey': '你的一個 Key',
+    'land.dev.t': '現有程式碼，\n改兩行就能用', 'land.dev.p': '把 Base URL 換成星樞的位址，填上你的 Key。OpenAI SDK、Anthropic SDK 和常見客戶端都不用改別的。',
+    'land.dev.keys': '管理我的 Key', 'land.dev.hello': '你好', 'land.apps': '在哪都能用',
+    'land.app.apk': '下載 APK 安裝檔', 'land.app.exe': '下載安裝程式', 'land.app.dmg': 'Intel 與 Apple 晶片通用',
 
     'auth.login': '登入', 'auth.register': '註冊', 'auth.username': '使用者名稱', 'auth.password': '密碼',
     'auth.password2': '再次輸入密碼', 'auth.email': '電子郵件', 'auth.code': '郵件驗證碼', 'auth.sendCode': '發送驗證碼',
@@ -171,6 +179,10 @@
     'land.f2.t': 'Top up with Alipay or WeChat Pay', 'land.f2.p': 'Credit arrives instantly and never expires. Redeem codes work too.',
     'land.f3.t': 'Switch models by name', 'land.f3.p': 'Change the model field in your request. No separate account with each provider.',
     'land.prices': 'Selected model prices', 'land.allPrices': 'See all model prices',
+    'nav.main': 'Main', 'land.web': 'Open web app', 'land.board': 'Many models flowing into one key', 'land.yourKey': 'Your one key',
+    'land.dev.t': 'Keep your code.\nChange two lines.', 'land.dev.p': 'Point the base URL at us and use your key. The OpenAI SDK, the Anthropic SDK and most clients need nothing else.',
+    'land.dev.keys': 'Manage my keys', 'land.dev.hello': 'Hello', 'land.apps': 'Use it anywhere',
+    'land.app.apk': 'APK installer', 'land.app.exe': 'Windows installer', 'land.app.dmg': 'Intel and Apple silicon',
 
     'auth.login': 'Sign in', 'auth.register': 'Create account', 'auth.username': 'Username', 'auth.password': 'Password',
     'auth.password2': 'Confirm password', 'auth.email': 'Email', 'auth.code': 'Email code', 'auth.sendCode': 'Send code',
