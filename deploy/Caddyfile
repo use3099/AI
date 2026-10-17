@@ -57,3 +57,6 @@
 		flush_interval -1
 	}
 }
+
+# ───────── 其他站点（例如 sub2api 后台入口，由 bash install.sh panel 生成；没有就忽略） ─────────
+import /etc/caddy/sites/*.caddy

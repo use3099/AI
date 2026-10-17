@@ -136,6 +136,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./web:/srv/web:ro
       - ./data/caddy:/data
+      - ./caddy-sites:/etc/caddy/sites:ro   # bash install.sh panel 生成的 sub2api 后台入口
     depends_on:
       - new-api
       - bff

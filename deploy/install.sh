@@ -3,6 +3,8 @@
 # 用法：  bash install.sh            首次安装
 #         bash install.sh update     更新网页 / App 后端，拉取最新镜像，数据不动
 #         bash install.sh key        （重新）生成 sub2api 管理密钥给 App 后端用
+#         bash install.sh panel [子域名]   开启 sub2api 后台公网入口（带暗号，默认 sub.主域名）
+#         bash install.sh panel-off  关闭公网入口
 set -euo pipefail
 
 APP_DIR=/opt/ai-relay
@@ -55,6 +57,7 @@ ensure_app_stack() {
   setenv EPAY_KEY ""
   chmod 600 .env
   mkdir -p data/bff && chown -R 1000:1000 data/bff   # BFF 容器以 node(1000) 用户运行
+  write_panel_site                                     # 已开启的 sub2api 后台入口保持不变
 
   docker compose up -d postgres redis
   for _ in $(seq 1 40); do docker compose exec -T postgres pg_isready -U newapi >/dev/null 2>&1 && break; sleep 2; done
@@ -116,6 +119,72 @@ gen_admin_key() {
   rm -f "$errf"
 }
 
+# sub2api 后台公网入口：独立子域名 + 暗号 Cookie。
+# 不带暗号访问一律 404，看不到 sub2api 的任何页面（包括登录/注册页）。
+# 用法：bash install.sh panel [子域名]
+write_panel_site() {
+  cd "$APP_DIR"
+  # shellcheck disable=SC1091
+  . ./.env
+  mkdir -p caddy-sites
+  if [ -z "${SUB2API_DOMAIN:-}" ] || [ -z "${SUB2API_PANEL_TOKEN:-}" ]; then
+    rm -f caddy-sites/sub2api.caddy
+    return 0
+  fi
+  cat >caddy-sites/sub2api.caddy <<SITE
+# 由 install.sh 生成，请勿手改（重新运行 bash install.sh panel 会覆盖）
+$SUB2API_DOMAIN {
+	encode zstd gzip
+	route {
+		# 打开 https://$SUB2API_DOMAIN/?k=暗号 → 写入 30 天的 Cookie
+		@setkey query k=$SUB2API_PANEL_TOKEN
+		header @setkey Set-Cookie "xs_panel=$SUB2API_PANEL_TOKEN; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax"
+		redir @setkey / 302
+
+		# 没有暗号 Cookie：直接 404
+		@nokey not header_regexp Cookie "(^|; *)xs_panel=$SUB2API_PANEL_TOKEN(;|\$)"
+		respond @nokey "Not Found" 404
+
+		reverse_proxy sub2api:8080 {
+			flush_interval -1
+		}
+	}
+}
+SITE
+}
+
+setup_panel() {
+  cd "$APP_DIR"
+  # shellcheck disable=SC1091
+  . ./.env
+  local domain="${1:-${SUB2API_DOMAIN:-sub.${DOMAIN#*.}}}"
+  # 根域名（如 example.com）时 ${DOMAIN#*.} 会变成 com，改用 sub.根域名
+  if [ "$(echo "$DOMAIN" | tr -cd '.' | wc -c)" -lt 2 ] && [ -z "${1:-}" ] && [ -z "${SUB2API_DOMAIN:-}" ]; then domain="sub.$DOMAIN"; fi
+  setenv SUB2API_DOMAIN "$domain"
+  sed -i "s|^SUB2API_DOMAIN=.*|SUB2API_DOMAIN=$domain|" .env
+  setenv SUB2API_PANEL_TOKEN "$(rand 32)"
+  write_panel_site
+  # shellcheck disable=SC1091
+  . ./.env
+  docker compose up -d caddy
+  docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || docker compose restart caddy
+  echo
+  echo "================ sub2api 后台公网入口 ✅ ================"
+  echo " 1) Cloudflare → DNS：添加 A 记录  ${domain%%.*}  →  本服务器 IP，橙色云朵（已代理）"
+  if [ "${HTTPS_PORT:-443}" != 443 ]; then
+    echo " 2) Cloudflare → 规则 → Origin Rules：在之前那条转发规则的主机名里加上 $domain"
+    echo "    （目标端口同样改写为 $HTTPS_PORT）"
+  fi
+  echo
+  echo " 以后用这个链接打开后台（相当于密码，不要发给别人）："
+  echo "   https://$domain/?k=$SUB2API_PANEL_TOKEN"
+  echo " 打开一次后浏览器会记住 30 天；不带暗号访问一律显示 404。"
+  echo " 后台账号: $SUB2API_ADMIN_EMAIL   密码: grep SUB2API_ADMIN_PASSWORD $APP_DIR/.env"
+  echo " 进后台后：确认合规说明 → 系统设置里关闭用户注册 → 回服务器运行 bash install.sh key"
+  echo " 想关掉公网入口：把 .env 里 SUB2API_DOMAIN= 清空，再运行 bash install.sh panel-off"
+  echo "========================================================"
+}
+
 print_app_notes() {
   # shellcheck disable=SC1091
   . "$APP_DIR/.env"
@@ -132,6 +201,21 @@ print_app_notes() {
   echo "   SUB2API_GROUP_ID=分组ID   EPAY_URL= / EPAY_PID= / EPAY_KEY=（易支付）  CNY_PER_USD=汇率"
   echo " 改完运行：cd $APP_DIR && docker compose up -d bff"
 }
+
+if [ "${1:-}" = "panel" ]; then
+  [ -f "$APP_DIR/.env" ] || die "还没安装过，请先直接运行 bash install.sh"
+  setup_panel "${2:-}"
+  exit 0
+fi
+
+if [ "${1:-}" = "panel-off" ]; then
+  [ -f "$APP_DIR/.env" ] || die "还没安装过"
+  sed -i "s|^SUB2API_DOMAIN=.*|SUB2API_DOMAIN=|" "$APP_DIR/.env"
+  write_panel_site
+  cd "$APP_DIR" && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || docker compose restart caddy
+  say "sub2api 公网入口已关闭"
+  exit 0
+fi
 
 if [ "${1:-}" = "key" ]; then
   [ -f "$APP_DIR/.env" ] || die "还没安装过，请先直接运行 bash install.sh"
