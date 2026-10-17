@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # AI 中转站一键部署脚本（new-api 后端 + 用户前台 + sub2api 内网网关 + App 后端 BFF + 自动 HTTPS）
 # 用法：  bash install.sh            首次安装
-#         bash install.sh update     只更新前台网页 / 拉取最新 new-api 镜像，数据不动
+#         bash install.sh update     更新网页 / App 后端，拉取最新镜像，数据不动
+#         bash install.sh key        （重新）生成 sub2api 管理密钥给 App 后端用
 set -euo pipefail
 
 APP_DIR=/opt/ai-relay
@@ -65,38 +66,54 @@ ensure_app_stack() {
   say "构建并启动全部服务（第一次要下载镜像，约 2-5 分钟）…"
   docker compose up -d --build --remove-orphans
 
-  # 自动生成 sub2api 的 Admin API Key，写进 .env 给 BFF 用
+  gen_admin_key
+}
+
+# 生成 sub2api 的 Admin API Key，写进 .env 给 BFF 用。
+# 也可以单独运行：bash install.sh key
+gen_admin_key() {
+  cd "$APP_DIR"
   # shellcheck disable=SC1091
   . ./.env
-  if [ -z "${SUB2API_ADMIN_KEY:-}" ] || [ "${SUB2API_ADMIN_KEY}" = "not-set" ]; then
-    say "等待 sub2api 就绪，生成管理密钥…"
-    local key="" ok=""
-    for _ in $(seq 1 60); do
-      if docker compose exec -T bff wget -q -O - http://sub2api:8080/health >/dev/null 2>&1; then ok=1; break; fi
-      sleep 3
-    done
-    if [ -n "$ok" ]; then
-      key=$(docker compose exec -T -e E="$SUB2API_ADMIN_EMAIL" -e P="$SUB2API_ADMIN_PASSWORD" bff node -e '
-        (async () => {
-          const u = "http://sub2api:8080/api/v1";
-          const j = r => r.json();
-          const l = await fetch(u + "/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: process.env.E, password: process.env.P }) }).then(j);
-          const t = l && l.data && l.data.access_token;
-          if (!t) { console.error(JSON.stringify(l)); process.exit(1); }
-          const k = await fetch(u + "/admin/settings/admin-api-key/regenerate", { method: "POST", headers: { authorization: "Bearer " + t } }).then(j);
-          if (!k || !k.data || !k.data.key) { console.error(JSON.stringify(k)); process.exit(1); }
-          process.stdout.write(k.data.key);
-        })().catch(e => { console.error(e.message); process.exit(1); });' 2>/dev/null) || key=""
-    fi
-    if [ -n "$key" ]; then
-      sed -i "s|^SUB2API_ADMIN_KEY=.*|SUB2API_ADMIN_KEY=$key|" .env
-      docker compose up -d bff
-      say "管理密钥已生成并写入 .env"
-    else
-      warn "没能自动生成 sub2api 管理密钥。请按下面「sub2api 后台」的方法登录，"
-      warn "在 系统设置 → Admin API Key 生成后，填到 $APP_DIR/.env 的 SUB2API_ADMIN_KEY=，再运行 docker compose up -d bff"
-    fi
+  if [ -n "${SUB2API_ADMIN_KEY:-}" ] && [ "${SUB2API_ADMIN_KEY}" != "not-set" ] && [ "${1:-}" != "force" ]; then
+    say "sub2api 管理密钥已存在"
+    return 0
   fi
+  say "等待 sub2api 就绪，生成管理密钥…"
+  local key="" ok="" errf
+  errf=$(mktemp)
+  for _ in $(seq 1 60); do
+    if docker compose exec -T bff wget -q -O - http://sub2api:8080/health >/dev/null 2>&1; then ok=1; break; fi
+    sleep 3
+  done
+  if [ -z "$ok" ]; then
+    warn "sub2api 没有启动成功，最近的日志："
+    docker compose logs --tail=30 sub2api || true
+    rm -f "$errf"; return 0
+  fi
+  key=$(docker compose exec -T -e E="$SUB2API_ADMIN_EMAIL" -e P="$SUB2API_ADMIN_PASSWORD" bff node -e '
+    (async () => {
+      const u = "http://sub2api:8080/api/v1";
+      const j = async r => { const t = await r.text(); try { return JSON.parse(t); } catch { return { status: r.status, body: t.slice(0, 300) }; } };
+      const l = await fetch(u + "/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: process.env.E, password: process.env.P }) }).then(j);
+      const t = l && l.data && l.data.access_token;
+      if (!t) { console.error("LOGIN " + JSON.stringify(l)); process.exit(1); }
+      const k = await fetch(u + "/admin/settings/admin-api-key/regenerate", { method: "POST", headers: { authorization: "Bearer " + t } }).then(j);
+      if (!k || !k.data || !k.data.key) { console.error("KEY " + JSON.stringify(k)); process.exit(1); }
+      process.stdout.write(k.data.key);
+    })().catch(e => { console.error("NET " + e.message); process.exit(1); });' 2>"$errf") || key=""
+  if [ -n "$key" ]; then
+    sed -i "s|^SUB2API_ADMIN_KEY=.*|SUB2API_ADMIN_KEY=$key|" .env
+    docker compose up -d bff
+    say "管理密钥已生成并写入 .env ✅"
+  elif grep -q "ADMIN_COMPLIANCE_ACK_REQUIRED" "$errf"; then
+    warn "sub2api 要求管理员先在后台阅读并确认《合规说明》，确认后才能生成管理密钥。"
+    warn "请按下面「sub2api 后台」的方法登录后台，确认合规说明，然后在服务器上运行：  bash install.sh key"
+  else
+    warn "没能自动生成 sub2api 管理密钥，原因：$(head -c 300 "$errf")"
+    warn "可以登录 sub2api 后台 → 系统设置 → Admin API Key 手动生成，填到 $APP_DIR/.env 的 SUB2API_ADMIN_KEY=，再运行 docker compose up -d bff"
+  fi
+  rm -f "$errf"
 }
 
 print_app_notes() {
@@ -115,6 +132,12 @@ print_app_notes() {
   echo "   SUB2API_GROUP_ID=分组ID   EPAY_URL= / EPAY_PID= / EPAY_KEY=（易支付）  CNY_PER_USD=汇率"
   echo " 改完运行：cd $APP_DIR && docker compose up -d bff"
 }
+
+if [ "${1:-}" = "key" ]; then
+  [ -f "$APP_DIR/.env" ] || die "还没安装过，请先直接运行 bash install.sh"
+  gen_admin_key "${2:-}"
+  exit 0
+fi
 
 if [ "${1:-}" = "update" ]; then
   [ -f "$APP_DIR/.env" ] || die "还没安装过，请先直接运行 bash install.sh"
