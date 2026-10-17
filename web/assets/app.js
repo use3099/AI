@@ -953,10 +953,11 @@
   async function pageDownload(el) {
     document.title = t('dl.title') + ' · ' + brandName();
     const dl = SITE.downloads || {};
+    const webApp = SITE.webApp === undefined ? '/app/' : SITE.webApp;
     const items = [['android', 'dl.android', 'APK'], ['ios', 'dl.ios', 'IPA'], ['windows', 'dl.win', 'EXE'], ['mac', 'dl.mac', 'DMG']].filter(([k]) => dl[k]);
     el.innerHTML = `<div class="landing"><header class="topbar"><a class="brand" href="#/">${logo()}<span>${esc(brandName())}</span></a><div class="row">${langSelect('lang-d')}</div></header>
       <div class="main" style="margin:0 auto;max-width:720px">${head(t('dl.title'), t('dl.sub'))}
-        <div class="panel">${items.map(([k, label, ext]) => `<div class="item"><div class="grow"><div class="name">${t(label)}</div><div class="meta"><span>${ext}</span></div></div><a class="btn sm" href="${esc(dl[k])}" download>${icon('down', 16)}${t('dl.get')}</a></div>`).join('')}</div>
+        <div class="panel">${webApp ? `<div class="item"><div class="grow"><div class="name">${t('dl.web')}</div><div class="meta"><span>${t('dl.webMeta')}</span></div></div><a class="btn sm" href="${esc(webApp)}">${t('dl.open')}</a></div>` : ''}${items.map(([k, label, ext]) => `<div class="item"><div class="grow"><div class="name">${t(label)}</div><div class="meta"><span>${ext}</span></div></div><a class="btn sm" href="${esc(dl[k])}" download>${icon('down', 16)}${t('dl.get')}</a></div>`).join('')}</div>
         ${dl.ios ? `<p class="muted small" style="margin-top:12px">${t('dl.iosNote')}</p>` : ''}
       </div></div>`;
     bindLang('lang-d');

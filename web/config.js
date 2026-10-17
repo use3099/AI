@@ -8,10 +8,12 @@ window.SITE = {
   apiBase: '',   // 正式地址：https://lanren666666.online
   // 客服 / 交流群（留空则不显示）
   support: { label: 'Telegram 交流群', url: '' },
+  // 网页版 App 地址（下载页第一项「网页版」，留空则隐藏）
+  webApp: '/app/',
   // App 下载地址（下载页使用，留空则隐藏对应按钮）
   downloads: {
     android: '/download/app.apk',
-    ios: '/download/app.ipa',
+    ios: '',                     // iOS 版暂不提供；以后有了填 '/download/app.ipa'
     windows: '/download/app-setup.exe',
     mac: '/download/app.dmg'
   },

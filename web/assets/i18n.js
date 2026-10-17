@@ -73,7 +73,7 @@
     'dl.title': '下载 App', 'dl.sub': '手机和电脑都能用，登录同一个账号。',
     'dl.android': 'Android', 'dl.ios': 'iPhone / iPad', 'dl.win': 'Windows', 'dl.mac': 'macOS',
     'dl.iosNote': 'iOS 版为 ipa 安装包，需用全能签、爱思助手等工具自签名后安装。',
-    'dl.get': '下载',
+    'dl.get': '下载', 'dl.web': '网页版', 'dl.webMeta': '不用安装，浏览器直接打开', 'dl.open': '打开',
 
     'c.copy': '复制', 'c.copied': '已复制', 'c.save': '保存', 'c.cancel': '取消', 'c.confirm': '确定', 'c.close': '关闭',
     'c.loading': '加载中…', 'c.retry': '重试', 'c.error': '出错了：{m}', 'c.network': '网络连接失败，请检查网络后重试',
@@ -153,7 +153,7 @@
     'dl.title': '下載 App', 'dl.sub': '手機和電腦都能用，登入同一個帳號。',
     'dl.android': 'Android', 'dl.ios': 'iPhone / iPad', 'dl.win': 'Windows', 'dl.mac': 'macOS',
     'dl.iosNote': 'iOS 版為 ipa 安裝檔，需用全能簽、愛思助手等工具自簽後安裝。',
-    'dl.get': '下載',
+    'dl.get': '下載', 'dl.web': '網頁版', 'dl.webMeta': '不用安裝，瀏覽器直接開啟', 'dl.open': '開啟',
 
     'c.copy': '複製', 'c.copied': '已複製', 'c.save': '儲存', 'c.cancel': '取消', 'c.confirm': '確定', 'c.close': '關閉',
     'c.loading': '載入中…', 'c.retry': '重試', 'c.error': '出錯了：{m}', 'c.network': '網路連線失敗，請檢查網路後重試',
@@ -233,7 +233,7 @@
     'dl.title': 'Get the app', 'dl.sub': 'Phone or computer, same account.',
     'dl.android': 'Android', 'dl.ios': 'iPhone / iPad', 'dl.win': 'Windows', 'dl.mac': 'macOS',
     'dl.iosNote': 'The iOS build is an unsigned .ipa. Sign it with a tool such as ESign or 3uTools before installing.',
-    'dl.get': 'Download',
+    'dl.get': 'Download', 'dl.web': 'Web app', 'dl.webMeta': 'Runs in your browser, nothing to install', 'dl.open': 'Open',
 
     'c.copy': 'Copy', 'c.copied': 'Copied', 'c.save': 'Save', 'c.cancel': 'Cancel', 'c.confirm': 'Confirm', 'c.close': 'Close',
     'c.loading': 'Loading…', 'c.retry': 'Try again', 'c.error': 'Something went wrong: {m}', 'c.network': 'Can’t reach the server. Check your connection and try again.',

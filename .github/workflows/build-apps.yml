@@ -1,4 +1,4 @@
-name: 构建 App（Android / iOS / Windows / macOS）
+name: 构建 App（Android / Windows / macOS）
 
 # 在 GitHub 网页 → Actions → 本工作流 → Run workflow 手动触发；
 # 或推送 v 开头的标签（如 v1.0.1）自动触发并发布 Release。
@@ -21,7 +21,7 @@ on:
 
 env:
   # 在仓库 Settings → Secrets and variables → Actions → Variables 里设置：
-  SITE_URL: ${{ github.event.inputs.site_url || vars.SITE_URL }}                       # 例如 https://api.example.com
+  SITE_URL: ${{ github.event.inputs.site_url || vars.SITE_URL || 'https://lanren666666.online:8443' }}   # 例如 https://api.example.com
   APP_NAME: ${{ vars.APP_NAME || '星枢 API' }}
   APP_ID: ${{ vars.APP_ID || 'com.xingshu.api' }}
   APP_VERSION: ${{ github.event.inputs.version || github.ref_name }}
@@ -77,35 +77,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: android, path: app/app.apk }
 
-  ios:
-    runs-on: macos-latest
-    defaults: { run: { working-directory: app } }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - name: 安装依赖并生成配置
-        run: |
-          export APP_VERSION="${APP_VERSION#v}"
-          npm install --no-audit --no-fund
-          npm run configure
-          npx cap add ios
-          npx capacitor-assets generate --ios --iconBackgroundColor '#F2F5F9' --splashBackgroundColor '#F2F5F9' || true
-          npx cap sync ios
-      - name: 打包未签名 ipa（用全能签等工具自签安装）
-        run: |
-          V="${APP_VERSION#v}"
-          cd ios/App
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" App/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $V" App/Info.plist
-          xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphoneos \
-            -archivePath build/App.xcarchive archive \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -20
-          mkdir -p Payload
-          cp -R build/App.xcarchive/Products/Applications/App.app Payload/
-          zip -qry ../../app.ipa Payload
-      - uses: actions/upload-artifact@v4
-        with: { name: ios, path: app/app.ipa }
+  # iOS 暂不打包（以后需要时，把旧版本里的 ios 任务加回来，并在 release 的 needs 里加上 ios）
 
   desktop:
     strategy:
@@ -140,7 +112,7 @@ jobs:
           path: app/${{ matrix.out }}
 
   release:
-    needs: [android, ios, desktop]
+    needs: [android, desktop]
     if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions: { contents: write }

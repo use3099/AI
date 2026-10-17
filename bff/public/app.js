@@ -62,13 +62,51 @@
   const imageOn = () => !!(appCfg && appCfg.image && appCfg.image.enabled);
   const logo = '<img class="logo" src="icon.svg" alt="">';
 
+  // ── 潮汐波纹：三层正弦波，宽度是画面的两倍，向左平移一半即可无缝循环 ──
+  function wavePath(amp, period, base, phase) {
+    const W = 2880, H = 180;
+    let d = `M0 ${H} L0 ${base}`;
+    for (let x = 0; x <= W; x += 24) d += ` L${x} ${(base + amp * Math.sin((x / period) * Math.PI * 2 + phase)).toFixed(1)}`;
+    return d + ` L${W} ${H} Z`;
+  }
+  const WAVES = [[18, 720, 70, 0], [14, 480, 92, 1.4], [10, 360, 112, 2.6]]
+    .map(([a, p, b, ph], i) => `<svg class="w${i + 1}" viewBox="0 0 2880 180" preserveAspectRatio="none" aria-hidden="true"><path d="${wavePath(a, p, b, ph)}"/></svg>`).join('');
+  const tide = (cls = '') => `<div class="tide ${cls}" aria-hidden="true">${WAVES}</div>`;
+  const wavebars = '<span class="wavebars" aria-label="正在生成"><i></i><i></i><i></i><i></i><i></i></span>';
+  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 按下时的涟漪
+  document.addEventListener('pointerdown', e => {
+    const el = e.target.closest('.btn, .send, .amount, .method, .icon-btn');
+    if (!el || el.disabled || reduceMotion()) return;
+    const r = el.getBoundingClientRect();
+    const dot = document.createElement('span');
+    dot.className = 'ripple';
+    dot.style.left = `${e.clientX - r.left}px`; dot.style.top = `${e.clientY - r.top}px`;
+    el.appendChild(dot);
+    dot.addEventListener('animationend', () => dot.remove());
+  });
+
+  // 数字滚动到目标值
+  function countUp(el, to, fmt) {
+    if (!el || to == null || reduceMotion()) { if (el) el.textContent = fmt(to); return; }
+    const start = performance.now(), dur = 900;
+    const step = now => {
+      const t = Math.min(1, (now - start) / dur), k = 1 - Math.pow(1 - t, 3);
+      el.textContent = fmt(to * k);
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   // ───────── 登录 / 注册 ─────────
   function viewAuth(mode) {
     const isReg = mode === 'register';
     app.innerHTML = `
       <main class="auth">
+        ${tide()}
         <div class="auth-card">
-          <div class="brand">${logo}<div><h1>星枢 API</h1><p>一个账号，畅聊 Claude、GPT、Gemini</p></div></div>
+          <div class="brand">${logo}<div><h1>星枢 API</h1><p>聊天、写作、生成图片，一个账号就够</p></div></div>
           <form id="authForm" novalidate>
             <label>邮箱或手机号<input name="account" autocomplete="username" inputmode="email" required></label>
             <label>密码<input name="password" type="password" autocomplete="${isReg ? 'new-password' : 'current-password'}" minlength="8" required></label>
@@ -125,8 +163,10 @@
       <div class="chat-layout">
         <aside class="sidebar" id="sidebar">
           <div class="side-head">${logo}<strong>星枢 API</strong></div>
-          <button class="btn primary block" id="newChat">${icon.plus}新对话</button>
-          ${imageOn() ? `<a class="btn block" href="#/image">${icon.image}AI 生图</a>` : ''}
+          <div class="side-nav" style="${imageOn() ? '' : 'grid-template-columns:1fr'}">
+            <button class="btn primary" id="newChat">${icon.plus}新对话</button>
+            ${imageOn() ? `<a class="btn" href="#/image">${icon.image}AI 生图</a>` : ''}
+          </div>
           <nav class="conv-list" id="convList"></nav>
           <a class="side-account" href="#/account">${icon.user}<span><b>${esc(me.user.account)}</b><small id="sideBal">余额 ${yuan(me.balance_usd)}</small></span></a>
         </aside>
@@ -138,6 +178,8 @@
             ${imageOn() ? `<a class="icon-btn" href="#/image" aria-label="AI 生图">${icon.image}</a>` : ''}
             <a class="icon-btn" href="#/account" aria-label="我的">${icon.user}</a>
           </header>
+          <div class="tideline" id="tideline"></div>
+          ${tide('chat-tide')}
           <div class="messages" id="messages"></div>
           <form class="composer" id="composer">
             <textarea id="input" rows="1" placeholder="输入消息…" enterkeyhint="send"></textarea>
@@ -163,8 +205,8 @@
 
     function renderConvList() {
       const list = $('#convList');
-      list.innerHTML = convs.length ? convs.map(c => `
-        <div class="conv ${current && c.id === current.id ? 'active' : ''}" data-id="${c.id}">
+      list.innerHTML = convs.length ? convs.map((c, i) => `
+        <div class="conv ${current && c.id === current.id ? 'active' : ''}" data-id="${c.id}" style="--i:${Math.min(i, 12)}">
           <span>${esc(c.title)}</span><button class="del" data-del="${c.id}" aria-label="删除">${icon.trash}</button>
         </div>`).join('') : '<p class="muted small pad">还没有对话</p>';
       list.onclick = e => {
@@ -183,23 +225,34 @@
       };
     }
 
-    function msgHtml(m) {
-      if (m.role === 'user') return `<div class="msg user"><div class="bubble">${esc(m.content).replace(/\n/g, '<br>')}</div></div>`;
-      const cls = m.error ? 'msg bot error' : 'msg bot';
-      return `<div class="${cls}"><div class="bubble md">${m.content ? window.renderMarkdown(m.content) : '<span class="typing"><i></i><i></i><i></i></span>'}</div></div>`;
+    let animateFrom = Infinity;   // 只给新出现的消息加进入动画
+    function msgHtml(m, i) {
+      const enter = i >= animateFrom ? ' enter' : '';
+      if (m.role === 'user') return `<div class="msg user${enter}"><div class="bubble">${esc(m.content).replace(/\n/g, '<br>')}</div></div>`;
+      const cls = (m.error ? 'msg bot error' : 'msg bot') + enter;
+      return `<div class="${cls}"><div class="bubble md">${m.content ? window.renderMarkdown(m.content) : wavebars}</div></div>`;
     }
+
+    const HINTS = ['帮我写一封请假邮件', '用三句话解释量子计算', '把这段话翻译成英文', '给我的小店起 5 个名字'];
 
     function renderMessages() {
       const box = $('#messages');
-      if (!current || !current.messages.length) {
-        box.innerHTML = `<div class="empty">${logo}<h2>今天想聊点什么？</h2><p class="muted">选好上方的模型，直接输入问题即可。</p></div>`;
+      const main = box.closest('.chat-main');
+      const empty = !current || !current.messages.length;
+      main.classList.toggle('is-empty', empty);
+      if (empty) {
+        box.innerHTML = `<div class="empty">${logo}<h2>今天想聊点什么？</h2><p class="muted">选好上方的模型，直接输入问题即可。</p>
+          <div class="hints">${HINTS.map((h, i) => `<button type="button" class="hint" style="--i:${i}">${h}</button>`).join('')}</div></div>`;
         return;
       }
       box.innerHTML = current.messages.map(msgHtml).join('');
+      animateFrom = Infinity;
       box.scrollTop = box.scrollHeight;
     }
 
     $('#messages').addEventListener('click', e => {
+      const hint = e.target.closest('.hint');
+      if (hint) { input.value = hint.textContent; autosize(); input.focus(); return; }
       const b = e.target.closest('[data-copy]');
       if (!b) return;
       const code = b.closest('.codeblock').querySelector('code').textContent;
@@ -226,6 +279,7 @@
       current.messages.push({ role: 'user', content: text });
       if (current.title === '新对话') current.title = text.slice(0, 24);
       const reply = { role: 'assistant', content: '' };
+      animateFrom = current.messages.length - 1;
       current.messages.push(reply);
       current.at = Date.now();
       input.value = ''; autosize();
@@ -238,6 +292,7 @@
       streaming = ctrl;
       const btn = $('#sendBtn');
       btn.innerHTML = icon.stop; btn.classList.add('stop'); btn.setAttribute('aria-label', '停止');
+      $('#tideline').classList.add('flowing');
       const box = $('#messages');
       const node = () => box.lastElementChild && box.lastElementChild.querySelector('.bubble');
       let pending = false;
@@ -298,6 +353,7 @@
       } finally {
         streaming = null;
         saveConvs();
+        if ($('#tideline')) $('#tideline').classList.remove('flowing');
         if (conv === current && $('#sendBtn')) {
           renderMessages();
           const b = $('#sendBtn'); b.innerHTML = icon.send; b.classList.remove('stop'); b.setAttribute('aria-label', '发送');
@@ -362,7 +418,7 @@
       const box = $('#imgResults'); if (!box) return;
       box.innerHTML = items.map((it, i) => `
         <figure class="card img-card">
-          ${it.pending ? '<div class="img-wait"><span class="typing"><i></i><i></i><i></i></span><small>正在生成，通常需要 10-60 秒…</small></div>'
+          ${it.pending ? `<div class="img-wait">${tide()}${wavebars}<small>正在生成，通常需要 10-60 秒…</small></div>`
             : it.error ? `<div class="img-wait error"><small>⚠️ ${esc(it.error)}${/余额不足/.test(it.error) ? ' <a href="#/recharge">去充值</a>' : ''}</small></div>`
             : `<img src="${it.src}" alt="${esc(it.prompt)}">`}
           <figcaption><span>${esc(it.prompt)}</span>${it.src ? `<a class="btn ghost" href="${it.src}" download="xingshu-${it.at}.png">保存</a>` : ''}<button class="icon-btn" data-del="${i}" aria-label="删除">${icon.trash}</button></figcaption>
@@ -418,8 +474,9 @@
     await refreshBalance();
     pageShell('我的', `
       <section class="card balance-card">
+        ${tide()}
         <p class="muted">账户余额</p>
-        <p class="big">${yuan(me.balance_usd)}</p>
+        <p class="big" id="bigBal">${yuan(0)}</p>
         <a class="btn primary" href="#/recharge">充值</a>
       </section>
       <section class="card list">
@@ -432,6 +489,7 @@
       </section>
       <button class="btn block ghost danger" id="logout">退出登录</button>
       <button class="btn block ghost" id="logoutAll">退出所有设备</button>`);
+    countUp($('#bigBal'), me.balance_usd, v => yuan(v));
     $('#logout').onclick = () => logout();
     $('#logoutAll').onclick = async () => {
       if (!confirm('确定要让所有设备上的登录都失效吗？')) return;
@@ -505,8 +563,8 @@
     pageShell('使用记录', '<p class="muted center pad">加载中…</p>', '#/account');
     try {
       const r = await api('GET', `/usage?page=${page}`);
-      const rows = r.items.map(i => `
-        <div class="usage-row">
+      const rows = r.items.map((i, n) => `
+        <div class="usage-row" style="--i:${n}">
           <div><b>${esc(i.model)}</b><small>${new Date(i.time).toLocaleString()}</small></div>
           <div class="right"><b>-¥${(i.cost_usd * cnyPerUsd).toFixed(4)}</b><small>${i.input_tokens} / ${i.output_tokens} tokens</small></div>
         </div>`).join('');
