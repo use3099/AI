@@ -5,6 +5,10 @@
 //     POST /admin/users/:id/balance      调整余额 {balance,operation:add|subtract|set,notes}，必须带 Idempotency-Key 头
 //     DELETE /admin/users/:id            删除用户
 //     GET  /admin/usage?user_id=         用量记录（分页）
+//     GET  /admin/groups/all              全部分组
+//     GET  /admin/users/:id/subscriptions 用户订阅
+//     POST /admin/subscriptions/assign    分配订阅 {user_id,group_id,validity_days,notes}
+//     POST /admin/subscriptions/:id/extend 续期 {days}，带 Idempotency-Key 头
 //   用户接口  /api/v1/*  认证头 Authorization: Bearer <JWT>
 //     POST /auth/login                   {email,password} → data.access_token
 //     POST /keys                         创建 API Key {name,group_id} → data.key
@@ -79,6 +83,26 @@ module.exports = {
   // 模型默认单价（美元 / token），找不到返回 { found:false }
   modelPricing(model) {
     return admin('GET', `/channels/model-pricing?model=${encodeURIComponent(model)}`);
+  },
+
+  // 全部分组（用来按名字找包月套餐的分组 ID）
+  allGroups() {
+    return admin('GET', '/groups/all');
+  },
+
+  // 用户的订阅列表（含 status / expires_at / 用量 / notes）
+  listUserSubs(id) {
+    return admin('GET', `/users/${id}/subscriptions`);
+  },
+
+  // 分配订阅：没有就新建；有但已过期就重新开通 validity_days 天
+  assignSub(userId, groupId, days, notes) {
+    return admin('POST', '/subscriptions/assign', { body: { user_id: userId, group_id: groupId, validity_days: days, notes } });
+  },
+
+  // 订阅续期 days 天：Idempotency-Key 保证重试不会重复加天数
+  extendSub(subId, days, idempotencyKey) {
+    return admin('POST', `/subscriptions/${subId}/extend`, { body: { days }, headers: { 'Idempotency-Key': idempotencyKey } });
   },
 
   listUsage(id, page = 1, pageSize = 20) {

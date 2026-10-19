@@ -112,6 +112,7 @@ services:
       - EPAY_PID=${EPAY_PID:-}
       - EPAY_KEY=${EPAY_KEY:-}
       - EPAY_METHODS=${EPAY_METHODS:-alipay,wxpay}
+      - SUB_PLANS=${SUB_PLANS:-}
       - EPAY2_URL=${EPAY2_URL:-}
       - EPAY2_PID=${EPAY2_PID:-}
       - EPAY2_KEY=${EPAY2_KEY:-}

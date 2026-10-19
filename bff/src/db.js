@@ -48,6 +48,17 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite ON users(invite_code
 db.exec('CREATE INDEX IF NOT EXISTS idx_users_inviter ON users(inviter_id)');
 const ocols = db.prepare('PRAGMA table_info(orders)').all().map(c => c.name);
 if (!ocols.includes('package_id')) db.exec('ALTER TABLE orders ADD COLUMN package_id TEXT');
+if (!ocols.includes('kind')) db.exec("ALTER TABLE orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'balance'");
+if (!ocols.includes('sub_plan')) db.exec('ALTER TABLE orders ADD COLUMN sub_plan TEXT');
+if (!ocols.includes('sub_group_id')) db.exec('ALTER TABLE orders ADD COLUMN sub_group_id INTEGER');
+if (!ocols.includes('sub_days')) db.exec('ALTER TABLE orders ADD COLUMN sub_days INTEGER');
+// 包月套餐专用 Key：每个用户每个订阅分组一个（套餐期内聊天用它，用完/到期回到余额 Key）
+db.exec(`CREATE TABLE IF NOT EXISTS sub_keys (
+  user_id   INTEGER NOT NULL,
+  group_id  INTEGER NOT NULL,
+  key_enc   TEXT NOT NULL,
+  PRIMARY KEY (user_id, group_id)
+)`);
 if (!ocols.includes('bonus_usd')) db.exec('ALTER TABLE orders ADD COLUMN bonus_usd REAL NOT NULL DEFAULT 0');
 
 // 邀请奖励：每笔被邀请人的充值订单最多奖励一次（order_no 唯一）

@@ -10,7 +10,7 @@ const assert = require('assert');
 
 const ADMIN_KEY = 'admin-test-key';
 const EPAY_KEY = 'epay-test-key';
-const state = { users: new Map(), nextId: 100, keys: new Map(), idem: new Set(), calls: [] };
+const state = { users: new Map(), nextId: 100, keys: new Map(), idem: new Set(), calls: [], subs: [], nextSub: 1 };
 const ok = data => JSON.stringify({ code: 0, message: 'success', data });
 
 // ── 模拟 sub2api ──
@@ -41,6 +41,25 @@ const mock = http.createServer(async (req, res) => {
       const user = state.users.get(+m[1]); if (body.password) user.password = body.password;
       return json(200, ok(user));
     }
+    if (u.pathname === '/api/v1/admin/groups/all') {
+      return json(200, ok([{ id: 2, name: '默认' }, { id: 7, name: '月卡', subscription_type: 'subscription', weekly_limit_usd: 5, monthly_limit_usd: 20 }, { id: 8, name: '大月卡', subscription_type: 'subscription', monthly_limit_usd: 40 }]));
+    }
+    if ((m = u.pathname.match(/^\/api\/v1\/admin\/users\/(\d+)\/subscriptions$/))) {
+      return json(200, ok(state.subs.filter(x => x.user_id === +m[1])));
+    }
+    if (u.pathname === '/api/v1/admin/subscriptions/assign' && req.method === 'POST') {
+      let sub = state.subs.find(x => x.user_id === body.user_id && x.group_id === body.group_id);
+      const exp = new Date(Date.now() + body.validity_days * 86400000).toISOString();
+      if (!sub) { sub = { id: state.nextSub++, user_id: body.user_id, group_id: body.group_id }; state.subs.push(sub); }
+      Object.assign(sub, { status: 'active', expires_at: exp, notes: body.notes, daily_usage_usd: 0, weekly_usage_usd: 0, monthly_usage_usd: 0 });
+      return json(200, ok(sub));
+    }
+    if ((m = u.pathname.match(/^\/api\/v1\/admin\/subscriptions\/(\d+)\/extend$/)) && req.method === 'POST') {
+      const k = req.headers['idempotency-key'];
+      const sub = state.subs.find(x => x.id === +m[1]);
+      if (k && !state.idem.has(k)) { state.idem.add(k); sub.expires_at = new Date(new Date(sub.expires_at).getTime() + body.days * 86400000).toISOString(); }
+      return json(200, ok(sub));
+    }
     if ((m = u.pathname.match(/^\/api\/v1\/admin\/groups\/(\d+)$/))) {
       return json(200, ok(+m[1] === 3 ? { id: 3, rate_multiplier: 1, image_price_1k: 0.01 } : { id: +m[1], rate_multiplier: 1.5, model_pricing: [{ models: ['claude-y'], input_price: 0.000002, output_price: 0.00001 }] }));
     }
@@ -69,7 +88,7 @@ const mock = http.createServer(async (req, res) => {
     if (!k) return json(401, JSON.stringify({ error: { message: 'invalid api key' } }));
     const uid = k.uid;
     if (u.pathname === '/v1/models') {
-      const data = k.group === 3 ? [{ id: 'gpt-image-x' }] : [{ id: 'gpt-x' }, { id: 'claude-y' }];
+      const data = k.group === 3 ? [{ id: 'gpt-image-x' }] : k.group === 7 ? [{ id: 'gpt-x' }, { id: 'sub-only' }] : [{ id: 'gpt-x' }, { id: 'claude-y' }];
       return json(200, JSON.stringify({ object: 'list', data }));
     }
     if (u.pathname === '/v1/images/generations') {
@@ -79,7 +98,9 @@ const mock = http.createServer(async (req, res) => {
       return json(200, JSON.stringify({ created: 1, data: [{ b64_json: Buffer.from('PNGDATA').toString('base64') }] }));
     }
     if (u.pathname === '/v1/chat/completions') {
-      if (state.users.get(uid).balance <= 0) return json(403, JSON.stringify({ error: { message: 'Insufficient balance' } }));
+      state.lastChatGroup = k.group;
+      if (k.group === 7 && state.subQuotaOut) return json(429, JSON.stringify({ error: { message: 'weekly limit exceeded' } }));
+      if (k.group !== 7 && state.users.get(uid).balance <= 0) return json(403, JSON.stringify({ error: { message: 'Insufficient balance' } }));
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write('data: {"choices":[{"delta":{"content":"你好"}}]}\n\n');
       res.write('data: {"choices":[{"delta":{"content":"！"}}]}\n\n');
@@ -104,7 +125,7 @@ async function main() {
       ...process.env, PORT: String(port), PUBLIC_URL: 'https://example.test', DATA_DIR: dataDir,
       BFF_JWT_SECRET: 'j'.repeat(48), BFF_DATA_SECRET: 'd'.repeat(48),
       SUB2API_URL: mockUrl, SUB2API_ADMIN_KEY: ADMIN_KEY, SUB2API_GROUP_ID: '2', SUB2API_IMAGE_GROUP_ID: '3', IMAGE_PRICE_NOTE: '每张约 ¥0.05',
-      EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7', WITHDRAW_MIN_USDT: '3', EPAY2_URL: 'https://pay2.example.test', EPAY2_PID: '2002', EPAY2_KEY: 'second-merchant-key',
+      EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7', WITHDRAW_MIN_USDT: '3', EPAY2_URL: 'https://pay2.example.test', EPAY2_PID: '2002', EPAY2_KEY: 'second-merchant-key', SUB_PLANS: '基础月卡:36:月卡,高级月卡:72:8:30:hot',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -302,6 +323,44 @@ async function main() {
     assert.equal(r.status, 400, '空描述');
     // 聊天 Key 仍在聊天分组
     assert.ok([...state.keys.values()].some(k => k.group === 2), '聊天 Key 在分组 2');
+
+    // 包月套餐：按分组名 / ID 找到分组，付款后分配订阅（不进余额），聊天走套餐 Key，额度用完自动改用余额
+    r = await api('GET', '/api/config');
+    assert.deepEqual(r.body.sub_plans.map(p => [p.id, p.name, p.price, p.weekly_usd, p.monthly_usd]), [['s1', '基础月卡', 36, 5, 20], ['s2', '高级月卡', 72, null, 40]]);
+    const balBefore = (await api('GET', '/api/me', null, token)).body.balance_usd;
+    const buySub = async () => {
+      const o = await api('POST', '/api/recharge', { sub_plan: 's1', method: 'alipay' }, token);
+      assert.equal(o.status, 200, JSON.stringify(o.body));
+      const q = Object.fromEntries(new URL(o.body.pay_url).searchParams);
+      assert.equal(q.money, '36.00');
+      const n = { pid: q.pid, trade_no: 'S' + o.body.order_no, out_trade_no: o.body.order_no, type: 'alipay', name: 'x', money: '36.00', trade_status: 'TRADE_SUCCESS' };
+      n.sign = epaySign(n, q.pid === '2002' ? 'second-merchant-key' : EPAY_KEY); n.sign_type = 'MD5';
+      assert.equal(await (await fetch(base + '/pay/notify?' + new URLSearchParams(n))).text(), 'success');
+      return o.body.order_no;
+    };
+    const sNo = await buySub();
+    r = await api('GET', `/api/recharge/${sNo}`, null, token);
+    assert.equal(r.body.status, 'credited'); assert.equal(r.body.kind, 'sub');
+    r = await api('GET', '/api/me', null, token);
+    assert.equal(r.body.subscription.name, '基础月卡'); assert.equal(r.body.subscription.weekly_usd, 5);
+    assert.equal(r.body.balance_usd, balBefore, '买套餐不进余额');
+    const exp1 = new Date(r.body.subscription.expires_at).getTime();
+    assert.ok(Math.abs(exp1 - Date.now() - 30 * 86400000) < 60000, '30 天');
+    const chat = () => fetch(base + '/api/chat', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }) });
+    let c = await chat(); assert.equal(c.status, 200); await c.text();
+    assert.equal(state.lastChatGroup, 7, '套餐期内走套餐分组');
+    r = await api('GET', '/api/models', null, token);
+    assert.ok(r.body.models.includes('sub-only') && r.body.models.includes('claude-y'), '套餐模型 + 余额模型');
+    await buySub();
+    r = await api('GET', '/api/me', null, token);
+    assert.ok(Math.abs(new Date(r.body.subscription.expires_at).getTime() - exp1 - 30 * 86400000) < 60000, '续费再加 30 天');
+    assert.equal(state.subs.length, 1);
+    state.subQuotaOut = true;
+    c = await chat(); assert.equal(c.status, 200, '额度用完改用余额'); await c.text();
+    assert.equal(state.lastChatGroup, 2);
+    state.subQuotaOut = false;
+    r = await api('POST', '/api/recharge', { sub_plan: 'nope', method: 'alipay' }, token);
+    assert.equal(r.status, 400);
 
     // 另一个用户不能查看别人的订单
     const r2 = await api('POST', '/api/auth/register', { account: '+61400000000', password: 'password456' });

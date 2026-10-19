@@ -681,6 +681,27 @@
       <div class="pkgs">${list.map((p, i) => pkgCard(p, i)).join('')}</div></section>`;
   }
 
+  // 包月套餐卡片（额度按 ¥ 显示：sub2api 里的美元用量 × 汇率）
+  const quota = p => [p.daily_usd != null && `每天 ¥${+(p.daily_usd * cnyPerUsd).toFixed(0)}`, p.weekly_usd != null && `每周 ¥${+(p.weekly_usd * cnyPerUsd).toFixed(0)}`, p.monthly_usd != null && `每月 ¥${+(p.monthly_usd * cnyPerUsd).toFixed(0)}`].filter(Boolean);
+  function subCard(p, i) {
+    return `<button type="button" class="pkg ${p.hot ? 'hot' : ''}" data-sub="${p.id}" data-css="--i:${i}">
+        ${p.hot ? '<span class="pkg-badge">推荐</span>' : ''}
+        <span class="pkg-name">${esc(p.name)}</span>
+        <span class="pkg-price"><small>¥</small>${p.price}</span>
+        <span class="pkg-get">${p.days} 天</span>
+        <span class="pkg-bonus plain">${quota(p).length ? esc(quota(p).join(' · ')) + ' 用量' : '包月畅用'}</span>
+      </button>`;
+  }
+  function subStatus(sub) {
+    if (!sub) return '';
+    const bar = (used, lim, label) => lim == null ? '' : `<div class="sub-bar"><span>${label}</span><i><b data-css="width:${Math.min(100, (used || 0) / lim * 100).toFixed(1)}%"></b></i><small>¥${((used || 0) * cnyPerUsd).toFixed(2)} / ¥${(lim * cnyPerUsd).toFixed(0)}</small></div>`;
+    return `<section class="card sub-card">
+        <div class="sec-head"><h2>${esc(sub.name)}</h2><a href="#/recharge?sub=${sub.plan}">续费</a></div>
+        <p class="muted tiny">到期：${new Date(sub.expires_at).toLocaleString()} · 额度用完自动改用余额</p>
+        ${bar(sub.daily_used, sub.daily_usd, '今日')}${bar(sub.weekly_used, sub.weekly_usd, '本周')}${bar(sub.monthly_used, sub.monthly_usd, '本月')}
+      </section>`;
+  }
+
   async function viewAccount() {
     await refreshBalance();
     pageShell('我的', `
@@ -690,6 +711,7 @@
         <p class="big"><span class="cur">¥</span><span id="bigBal">0.00</span></p>
         <a class="btn primary pill" href="#/recharge">充值</a>
       </section>
+      ${subStatus(me.subscription)}
       ${pkgStrip()}
       <a class="invite-banner" href="#/invite">
         <span class="ib-icon">${icon.gift}</span>
@@ -716,8 +738,8 @@
   }
 
   async function viewRecharge() {
-    let cfg;
-    try { cfg = (await api('GET', '/config')).recharge; } catch (e) { return toast(e.message, 'err'); }
+    let cfg, subs = [];
+    try { const full = await api('GET', '/config'); cfg = full.recharge; subs = full.sub_plans || []; } catch (e) { return toast(e.message, 'err'); }
     cnyPerUsd = cfg.cny_per_usd || cnyPerUsd;
     if (!cfg.enabled) return pageShell('充值', '<section class="card"><p>充值暂未开放，请联系客服。</p></section>', '#/account');
     const names = { alipay: '支付宝', wxpay: '微信支付', qqpay: 'QQ 钱包' };
@@ -727,8 +749,12 @@
     try { first = (await api('GET', '/recharge/bonus')).first_bonus || 0; } catch { /* 忽略 */ }
     pageShell('充值', `
       ${first ? `<p class="invite-chip wide">${icon.gift}<span>你是受邀用户，首次充值额外多送 <b>${first}%</b></span></p>` : ''}
+      ${subs.length ? `<section class="card">
+        <p class="label">包月套餐 <small class="muted">· 不进余额，额度用完自动改用余额</small></p>
+        <div class="pkgs grid" id="subs">${subs.map((p, i) => subCard(p, i)).join('')}</div>
+      </section>` : ''}
       <section class="card">
-        <p class="label">选择套餐</p>
+        <p class="label">${subs.length ? '按量充值' : '选择套餐'}</p>
         <div class="pkgs grid" id="amounts">${list.length
           ? list.map((p, i) => pkgCard(p, i, true)).join('')
           : cfg.amounts.map((a, i) => `<button type="button" class="amount ${i === 1 ? 'on' : ''}" data-a="${a}">¥${a}</button>`).join('')}</div>
@@ -746,20 +772,34 @@
       box.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
       if (cls === 'amount') $('#customAmt').value = '';
     });
-    $('#amounts').querySelectorAll('[data-pkg]').forEach(b => b.classList.toggle('on', b.dataset.pkg === want));
+    const wantSub = (location.hash.match(/sub=(\w+)/) || [])[1];
+    $('#amounts').querySelectorAll('[data-pkg]').forEach(b => b.classList.toggle('on', !wantSub && b.dataset.pkg === want));
     pickOne($('#amounts'), 'amount'); pickOne($('#methods'), 'method');
-    $('#customAmt').addEventListener('input', () => $('#amounts').querySelectorAll('button').forEach(x => x.classList.remove('on')));
+    const subBox = $('#subs');
+    const clearSubs = () => subBox && subBox.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    const clearAmounts = () => $('#amounts').querySelectorAll('button').forEach(x => x.classList.remove('on'));
+    if (subBox) {
+      subBox.querySelectorAll('[data-sub]').forEach(b => b.classList.toggle('on', b.dataset.sub === wantSub));
+      subBox.addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        subBox.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+        clearAmounts(); $('#customAmt').value = '';
+      });
+      $('#amounts').addEventListener('click', e => { if (e.target.closest('button')) clearSubs(); });
+    }
+    $('#customAmt').addEventListener('input', () => { clearAmounts(); clearSubs(); });
 
     $('#payBtn').onclick = async () => {
       const custom = $('#customAmt').value;
+      const subSel = $('#subs .on');
       const sel = $('#amounts .on');
       const pkg = !custom && sel && sel.dataset.pkg;
       const amount = Number(custom || (sel && sel.dataset.a));
       const method = $('#methods .on') && $('#methods .on').dataset.m;
-      if (!pkg && !amount) return toast('请选择套餐或金额', 'warn');
+      if (!subSel && !pkg && !amount) return toast('请选择套餐或金额', 'warn');
       const btn = $('#payBtn'); btn.disabled = true;
       try {
-        const o = await api('POST', '/recharge', pkg ? { package: pkg, method } : { amount, method });
+        const o = await api('POST', '/recharge', subSel ? { sub_plan: subSel.dataset.sub, method } : pkg ? { package: pkg, method } : { amount, method });
         const w = window.open(o.pay_url, '_blank');
         if (!w) location.href = o.pay_url;
         $('#payStatus').textContent = '已打开支付页面，付款完成后回到这里，会自动到账…';
@@ -777,7 +817,7 @@
         const o = await api('GET', `/recharge/${no}`);
         if (o.status === 'credited') {
           clearInterval(pollOrder.t);
-          toast(`充值成功 ¥${o.amount_cny}`, 'ok');
+          toast(o.kind === 'sub' ? `${o.sub_plan || '套餐'}已开通` : `充值成功 ¥${o.amount_cny}`, 'ok');
           go('#/account');
         } else if (o.status === 'paid') {
           const s = $('#payStatus'); if (s) s.textContent = '已付款，正在到账…';
@@ -804,11 +844,12 @@
   async function viewOrders() {
     pageShell('充值记录', `<p class="muted center pad">${wavebars}</p>`, '#/account');
     const st = { pending: '待支付', paid: '到账中', credited: '已到账' };
+    const stSub = { pending: '待支付', paid: '开通中', credited: '已开通' };
     try {
       const r = await api('GET', '/recharge/orders');
       $('.page-body').innerHTML = `<section class="card list">${r.items.map((o, n) => `
-        <div class="usage-row" data-css="--i:${n}"><div><b>¥${esc(o.amount_cny)}${o.bonus_usd > 0 ? ` <em class="plus">+¥${(o.bonus_usd * cnyPerUsd).toFixed(2)} 赠送</em>` : ''}</b><small>${new Date(o.created_at).toLocaleString()}</small></div>
-        <div class="right"><span class="tag ${o.status}">${st[o.status] || o.status}</span></div></div>`).join('') || '<p class="muted center pad">还没有充值记录</p>'}</section>`;
+        <div class="usage-row" data-css="--i:${n}"><div><b>¥${esc(o.amount_cny)}${o.kind === 'sub' ? ` <em class="plus">${esc(o.sub_plan || '包月套餐')} ${o.sub_days || ''}天</em>` : ''}${o.bonus_usd > 0 ? ` <em class="plus">+¥${(o.bonus_usd * cnyPerUsd).toFixed(2)} 赠送</em>` : ''}</b><small>${new Date(o.created_at).toLocaleString()}</small></div>
+        <div class="right"><span class="tag ${o.status}">${(o.kind === 'sub' ? stSub : st)[o.status] || o.status}</span></div></div>`).join('') || '<p class="muted center pad">还没有充值记录</p>'}</section>`;
     } catch (e) { toast(e.message, 'err'); }
   }
 

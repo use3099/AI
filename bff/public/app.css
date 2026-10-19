@@ -490,3 +490,11 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .tag.paid { background: var(--jade-soft); color: var(--jade); }
 .tag.rejected { background: var(--hair-2); color: var(--faint); }
 .form[hidden] { display: none !important; }
+
+/* 包月套餐：用量条 */
+.sub-card .sec-head h2 { font-size: 17px; }
+.sub-bar { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 10px; margin-top: 10px; font-size: 13px; }
+.sub-bar i { display: block; height: 6px; border-radius: 99px; background: var(--hair-2); overflow: hidden; }
+.sub-bar i b { display: block; height: 100%; border-radius: 99px; background: var(--jade); transition: width .6s var(--ease); }
+.sub-bar small { color: var(--mute); font-variant-numeric: tabular-nums; }
+.label small { font-weight: 400; }

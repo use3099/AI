@@ -170,6 +170,117 @@ async function upstreamError(upstream, tag) {
   return new HttpError(upstream.status >= 500 ? 502 : upstream.status, cleanMessage(msg) || '请求失败');
 }
 
+// ───────── 包月套餐（sub2api 订阅分组） ─────────
+// 套餐分组：按名字或 ID 找到 sub2api 里的分组，顺带读出每日/每周/每月额度（缓存 10 分钟）
+let subGroupsCache = { at: 0, map: null };
+async function subGroups() {
+  if (!config.subPlans.length) return new Map();
+  if (subGroupsCache.map && Date.now() - subGroupsCache.at < 10 * 60 * 1000) return subGroupsCache.map;
+  const all = await s2.allGroups();
+  const list = Array.isArray(all) ? all : (all && all.items) || [];
+  const map = new Map();
+  for (const p of config.subPlans) {
+    const g = list.find(x => String(x.id) === p.group) || list.find(x => x.name === p.group);
+    if (!g) { log('包月套餐找不到分组', p.name, p.group); continue; }
+    map.set(p.id, {
+      group_id: Number(g.id),
+      daily: g.daily_limit_usd ?? null,
+      weekly: g.weekly_limit_usd ?? null,
+      monthly: g.monthly_limit_usd ?? null,
+    });
+  }
+  subGroupsCache = { at: Date.now(), map };
+  return map;
+}
+
+async function subPlansPublic() {
+  let groups = new Map();
+  try { groups = await subGroups(); } catch (e) { log('读包月分组失败', e.message); }
+  return config.subPlans.filter(p => groups.has(p.id)).map(p => {
+    const g = groups.get(p.id);
+    return { id: p.id, name: p.name, price: p.price, days: p.days, hot: p.hot, daily_usd: g.daily, weekly_usd: g.weekly, monthly_usd: g.monthly };
+  });
+}
+
+// 用户当前有效的套餐（缓存 1 分钟）：只认配置里的套餐分组
+const activeSubCache = new Map();
+async function activeSub(user, fresh = false) {
+  if (!config.subPlans.length || !user.s2_user_id) return null;
+  const c = activeSubCache.get(user.id);
+  if (!fresh && c && Date.now() - c.at < 60 * 1000) return c.sub;
+  let sub = null;
+  try {
+    const groups = await subGroups();
+    const byGroup = new Map([...groups].map(([pid, g]) => [g.group_id, { pid, g }]));
+    const subs = await s2.listUserSubs(user.s2_user_id);
+    const now = Date.now();
+    for (const x of Array.isArray(subs) ? subs : []) {
+      const hit = byGroup.get(Number(x.group_id));
+      if (!hit || x.status !== 'active' || !(new Date(x.expires_at).getTime() > now)) continue;
+      if (!sub || new Date(x.expires_at) > new Date(sub.expires_at)) {
+        const plan = config.subPlans.find(p => p.id === hit.pid);
+        sub = {
+          id: x.id, plan: plan.id, name: plan.name, group_id: hit.g.group_id, expires_at: x.expires_at,
+          daily_used: x.daily_usage_usd, weekly_used: x.weekly_usage_usd, monthly_used: x.monthly_usage_usd,
+          daily_usd: hit.g.daily, weekly_usd: hit.g.weekly, monthly_usd: hit.g.monthly,
+        };
+      }
+    }
+  } catch (e) {
+    log('查套餐失败', user.id, e.message);
+    if (c) return c.sub;
+  }
+  activeSubCache.set(user.id, { at: Date.now(), sub });
+  return sub;
+}
+
+// 套餐专用 Key：第一次用到时才开（建在订阅分组里，用量从套餐额度扣）
+const subKeyJobs = new Map();
+async function subKey(user, groupId) {
+  const row = db.prepare('SELECT key_enc FROM sub_keys WHERE user_id = ? AND group_id = ?').get(user.id, groupId);
+  if (row) return decrypt(row.key_enc);
+  const jk = `${user.id}:${groupId}`;
+  if (!subKeyJobs.has(jk)) {
+    const job = (async () => {
+      const password = randomString(32);
+      await s2.setPassword(user.s2_user_id, password);
+      const jwt = await s2.login(user.s2_email, password);
+      const key = await s2.createKey(jwt, `app-sub-${groupId}`, groupId);
+      db.prepare('INSERT OR REPLACE INTO sub_keys (user_id, group_id, key_enc) VALUES (?, ?, ?)').run(user.id, groupId, encrypt(key));
+      return key;
+    })().finally(() => subKeyJobs.delete(jk));
+    subKeyJobs.set(jk, job);
+  }
+  return subKeyJobs.get(jk);
+}
+
+// 聊天用哪个 Key：有有效套餐就用套餐 Key，否则用余额 Key
+async function chatKeys(user) {
+  const bal = userKey(user);
+  const sub = await activeSub(user);
+  if (!sub) return { primary: bal, fallback: null };
+  try {
+    return { primary: await subKey(user, sub.group_id), fallback: bal };
+  } catch (e) {
+    log('开通套餐 Key 失败，先用余额', user.id, e.message);
+    return { primary: bal, fallback: null };
+  }
+}
+
+// 付款后开通 / 续期套餐。重试安全：续期带 Idempotency-Key；新开的订阅备注里记了订单号，重试时认出来就不再加
+async function grantSub(user, order) {
+  const subs = await s2.listUserSubs(user.s2_user_id);
+  const ex = (Array.isArray(subs) ? subs : []).find(x => Number(x.group_id) === Number(order.sub_group_id));
+  const notes = `星枢 App 订单 ${order.no}`;
+  if (ex && String(ex.notes || '').includes(order.no)) return;
+  if (ex && ex.status === 'active' && new Date(ex.expires_at).getTime() > Date.now()) {
+    await s2.extendSub(ex.id, order.sub_days, `bff-sub-${order.no}`);
+  } else {
+    await s2.assignSub(user.s2_user_id, Number(order.sub_group_id), order.sub_days, notes);
+  }
+  activeSubCache.delete(user.id);
+}
+
 // ───────── 充值到账（支付成功 → 给 sub2api 加余额） ─────────
 async function creditOrder(no) {
   const order = db.prepare('SELECT * FROM orders WHERE no = ?').get(no);
@@ -177,9 +288,15 @@ async function creditOrder(no) {
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(order.user_id);
   try {
     if (!user || !user.s2_user_id) throw new Error('用户未开通');
-    await s2.addBalance(user.s2_user_id, order.credit_usd, `App 充值 ¥${order.amount_cny} 订单 ${order.no}`, `bff-order-${order.no}`);
-    db.prepare("UPDATE orders SET status = 'credited', credited_at = ?, last_error = NULL WHERE no = ? AND status = 'paid'").run(Date.now(), no);
-    log('充值到账', no, `user=${order.user_id}`, `+$${order.credit_usd}`);
+    if (order.kind === 'sub') {
+      await grantSub(user, order);
+      db.prepare("UPDATE orders SET status = 'credited', credited_at = ?, last_error = NULL WHERE no = ? AND status = 'paid'").run(Date.now(), no);
+      log('套餐开通', no, `user=${order.user_id}`, `${order.sub_plan} +${order.sub_days}天`);
+    } else {
+      await s2.addBalance(user.s2_user_id, order.credit_usd, `App 充值 ¥${order.amount_cny} 订单 ${order.no}`, `bff-order-${order.no}`);
+      db.prepare("UPDATE orders SET status = 'credited', credited_at = ?, last_error = NULL WHERE no = ? AND status = 'paid'").run(Date.now(), no);
+      log('充值到账', no, `user=${order.user_id}`, `+$${order.credit_usd}`);
+    }
   } catch (e) {
     db.prepare('UPDATE orders SET last_error = ? WHERE no = ?').run(String(e.message).slice(0, 500), no);
     log('充值到账失败，稍后重试', no, e.message);
@@ -267,6 +384,7 @@ const route = (method, pattern, handler) => routes.push({ method, pattern, handl
 route('GET', '/api/health', async () => ({ ok: true }));
 
 route('GET', '/api/config', async () => ({
+  sub_plans: await subPlansPublic(),
   recharge: {
     enabled: config.epay.enabled,
     methods: config.epay.methods,
@@ -345,7 +463,8 @@ route('GET', '/api/me', async (req) => {
   if (user.s2_user_id) {
     try { balance = Number((await s2.getUser(user.s2_user_id)).balance); } catch (e) { log('查余额失败', e.message); }
   }
-  return { user: publicUser(user), balance_usd: balance, cny_per_usd: config.cnyPerUsd };
+  const sub = await activeSub(user, true);
+  return { user: publicUser(user), balance_usd: balance, cny_per_usd: config.cnyPerUsd, subscription: sub };
 });
 
 let modelsCache = { at: 0, list: [] };
@@ -354,7 +473,30 @@ function anyUserKey() {
   const row = db.prepare("SELECT s2_key_enc FROM users WHERE s2_key_enc IS NOT NULL AND status = 'active' ORDER BY id DESC LIMIT 1").get();
   return row ? decrypt(row.s2_key_enc) : null;
 }
-route('GET', '/api/models', async (req) => ({ models: await listModels(req.headers.authorization ? auth(req) : null) }));
+route('GET', '/api/models', async (req) => {
+  const user = req.headers.authorization ? auth(req) : null;
+  const models = await listModels(user);
+  if (!user) return { models };
+  // 有套餐：套餐分组里的模型也列出来
+  const sub = await activeSub(user);
+  if (!sub) return { models };
+  try {
+    const extra = await groupModels(sub.group_id, await subKey(user, sub.group_id));
+    return { models: [...new Set([...models, ...extra])].sort() };
+  } catch (e) { log('读套餐模型失败', e.message); return { models }; }
+});
+const groupModelsCache = new Map();
+async function groupModels(groupId, key) {
+  const c = groupModelsCache.get(groupId);
+  if (c && Date.now() - c.at < 5 * 60 * 1000) return c.list;
+  const r = await s2.gateway('GET', '/models', key, undefined, AbortSignal.timeout(15000));
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  let ids = (j.data || []).map(m => m.id).filter(Boolean);
+  if (config.allowedModels.length) ids = ids.filter(id => config.allowedModels.includes(id));
+  groupModelsCache.set(groupId, { at: Date.now(), list: ids });
+  return ids;
+}
 async function listModels(user) {
   if (Date.now() - modelsCache.at < 5 * 60 * 1000 && modelsCache.list.length) return modelsCache.list;
   const key = user ? userKey(user) : anyUserKey();
@@ -389,9 +531,17 @@ route('POST', '/api/chat', async (req, res) => {
   const ctrl = new AbortController();
   res.on('close', () => { if (!res.writableEnded) ctrl.abort(); });
 
+  const keys = await chatKeys(user);
   let upstream;
   try {
-    upstream = await s2.gateway('POST', '/chat/completions', userKey(user), body, ctrl.signal);
+    upstream = await s2.gateway('POST', '/chat/completions', keys.primary, body, ctrl.signal);
+    // 套餐额度用完 / 套餐不支持这个模型：自动改用余额再试一次
+    if (!upstream.ok && keys.fallback && [400, 402, 403, 404, 429].includes(upstream.status)) {
+      const t = await upstream.text().catch(() => '');
+      log('套餐请求失败，改用余额', user.id, upstream.status, t.slice(0, 160));
+      activeSubCache.delete(user.id);
+      upstream = await s2.gateway('POST', '/chat/completions', keys.fallback, body, ctrl.signal);
+    }
   } catch (e) {
     if (ctrl.signal.aborted) return;
     log('chat 上游连接失败', e.message);
@@ -621,6 +771,7 @@ route('POST', '/api/recharge', async (req) => {
   if (!config.epay.enabled) throw new HttpError(503, '充值暂未开放');
   rateLimit('order:' + user.id, 10, 10 * 60 * 1000);
   const body = await readJson(req);
+  if (body.sub_plan) return createSubOrder(user, body);
   const pkg = body.package ? config.packages.find(p => p.id === String(body.package)) : null;
   if (body.package && !pkg) throw new HttpError(400, '套餐不存在，请刷新后重试');
   const amount = pkg ? pkg.price : Number(body.amount);
@@ -647,15 +798,33 @@ route('POST', '/api/recharge', async (req) => {
   };
 });
 
+// 买包月套餐：付款后分配订阅，不进余额
+async function createSubOrder(user, body) {
+  const plan = config.subPlans.find(p => p.id === String(body.sub_plan));
+  const groups = await subGroups().catch(() => new Map());
+  if (!plan || !groups.has(plan.id)) throw new HttpError(400, '套餐不存在，请刷新后重试');
+  const method = String(body.method || '');
+  if (!config.epay.methods.includes(method)) throw new HttpError(400, '不支持的支付方式');
+  const amountStr = money(plan.price);
+  const no = `XS${Date.now()}${crypto.randomInt(1000, 9999)}`;
+  db.prepare("INSERT INTO orders (no, user_id, amount_cny, credit_usd, bonus_usd, method, kind, sub_plan, sub_group_id, sub_days, created_at) VALUES (?, ?, ?, 0, 0, ?, 'sub', ?, ?, ?, ?)")
+    .run(no, user.id, amountStr, method, plan.name, groups.get(plan.id).group_id, plan.days, Date.now());
+  return {
+    order_no: no,
+    amount_cny: amountStr,
+    pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API ${plan.name}` }),
+  };
+}
+
 route('GET', '/api/recharge/orders', async (req) => {
   const user = auth(req);
-  const rows = db.prepare('SELECT no, amount_cny, credit_usd, bonus_usd, package_id, method, status, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id);
+  const rows = db.prepare('SELECT no, amount_cny, credit_usd, bonus_usd, package_id, method, status, kind, sub_plan, sub_days, created_at FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').all(user.id);
   return { items: rows };
 });
 
 route('GET', /^\/api\/recharge\/(XS\d+)$/, async (req, res, url, m) => {
   const user = auth(req);
-  const o = db.prepare('SELECT no, amount_cny, credit_usd, method, status, created_at FROM orders WHERE no = ? AND user_id = ?').get(m[1], user.id);
+  const o = db.prepare('SELECT no, amount_cny, credit_usd, method, status, kind, sub_plan, created_at FROM orders WHERE no = ? AND user_id = ?').get(m[1], user.id);
   if (!o) throw new HttpError(404, '订单不存在');
   return o;
 });

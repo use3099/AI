@@ -30,6 +30,16 @@ function parsePackages(v) {
   });
 }
 
+// 包月套餐（sub2api 的「订阅」分组）：名称:价格(元):分组名或分组ID[:天数][:hot]，逗号分隔
+function parseSubPlans(v) {
+  return String(v || '').split(',').map(s => s.trim()).filter(Boolean).map((s, i) => {
+    const [name, price, group, days, flag] = s.split(':').map(x => (x || '').trim());
+    const p = Number(price), d = Number(days || 30);
+    if (!name || !(p > 0) || !group || !(d >= 1 && d <= 3650)) throw new Error(`SUB_PLANS 格式不对: ${s}（应为 名称:价格:分组名或ID[:天数][:hot]）`);
+    return { id: 's' + (i + 1), name, price: p, group, days: Math.round(d), hot: flag === 'hot' || days === 'hot' };
+  });
+}
+
 const config = {
   port: num('PORT', 8787),
   basePath: (env.BASE_PATH ?? '/app').replace(/\/+$/, ''),   // 对外路径前缀
@@ -76,6 +86,8 @@ const config = {
   },
   // 套餐推荐：名称:价格(元):赠送百分比[:hot]，逗号分隔。hot 的那个显示「推荐」
   packages: parsePackages(env.PACKAGES || '入门:10:0,常用:50:5,超值:100:10:hot,畅享:300:15'),
+  // 包月套餐：付款后在 sub2api 里给用户「分配订阅」（不进余额）；套餐额度用完自动改用余额
+  subPlans: parseSubPlans(env.SUB_PLANS),
   // 推广佣金（现金，USDT）：好友首次充值，推广人得实付金额的 REFERRAL_FIRST_PERCENT%；之后每次得 REFERRAL_RENEW_PERCENT%
   // 满 WITHDRAW_MIN_USDT 可申请提现（TRC20），TG 通知管理员人工打款。好友首充额外多送 REFERRAL_INVITEE_BONUS% 额度
   referral: {
