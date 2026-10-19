@@ -38,8 +38,8 @@ function pick() {
 }
 
 // 生成跳转到收银台的地址（App 用系统浏览器打开）
-function payUrl({ orderNo, amount, method, name }) {
-  const m = pick();
+function payUrl({ orderNo, amount, method, name, merchant }) {
+  const m = merchant || pick();
   const base = config.publicUrl + config.basePath;
   const params = {
     pid: m.pid,
@@ -55,4 +55,20 @@ function payUrl({ orderNo, amount, method, name }) {
   return `${m.url}/submit.php?${new URLSearchParams(params).toString()}`;
 }
 
-module.exports = { sign, verify, payUrl, merchants };
+// 主动查单（不靠回调）：彩虹易支付 GET /api.php?act=order&pid=&key=&out_trade_no=
+// 返回 { paid, money, trade_no }；查不到 / 出错返回 null
+async function query(orderNo, pid) {
+  const list = merchants().filter(m => !pid || m.pid === String(pid));
+  for (const m of list) {
+    try {
+      const u = `${m.url}/api.php?${new URLSearchParams({ act: 'order', pid: m.pid, key: m.key, out_trade_no: orderNo })}`;
+      const r = await fetch(u, { signal: AbortSignal.timeout(10000) });
+      const j = JSON.parse(await r.text());
+      if (Number(j.code) !== 1) continue;
+      return { paid: Number(j.status) === 1, money: String(j.money ?? ''), trade_no: String(j.trade_no || ''), pid: m.pid };
+    } catch { /* 换下一个商户 */ }
+  }
+  return null;
+}
+
+module.exports = { sign, verify, payUrl, merchants, pick, query };

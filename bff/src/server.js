@@ -787,14 +787,15 @@ route('POST', '/api/recharge', async (req) => {
   const bonus = round6(base * bonusPct / 100);
   const credit = round6(base + bonus);
   const no = `XS${Date.now()}${crypto.randomInt(1000, 9999)}`;
-  db.prepare('INSERT INTO orders (no, user_id, amount_cny, credit_usd, bonus_usd, package_id, method, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(no, user.id, amountStr, credit, bonus, pkg ? pkg.id : null, method, Date.now());
+  const merchant = epay.pick();
+  db.prepare('INSERT INTO orders (no, user_id, amount_cny, credit_usd, bonus_usd, package_id, method, epay_pid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(no, user.id, amountStr, credit, bonus, pkg ? pkg.id : null, method, merchant.pid, Date.now());
   return {
     order_no: no,
     amount_cny: amountStr,
     credit_usd: credit,
     bonus_percent: bonusPct,
-    pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API 充值 ¥${amountStr}` }),
+    pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API 充值 ¥${amountStr}`, merchant }),
   };
 });
 
@@ -807,12 +808,13 @@ async function createSubOrder(user, body) {
   if (!config.epay.methods.includes(method)) throw new HttpError(400, '不支持的支付方式');
   const amountStr = money(plan.price);
   const no = `XS${Date.now()}${crypto.randomInt(1000, 9999)}`;
-  db.prepare("INSERT INTO orders (no, user_id, amount_cny, credit_usd, bonus_usd, method, kind, sub_plan, sub_group_id, sub_days, created_at) VALUES (?, ?, ?, 0, 0, ?, 'sub', ?, ?, ?, ?)")
-    .run(no, user.id, amountStr, method, plan.name, groups.get(plan.id).group_id, plan.days, Date.now());
+  const merchant = epay.pick();
+  db.prepare("INSERT INTO orders (no, user_id, amount_cny, credit_usd, bonus_usd, method, kind, sub_plan, sub_group_id, sub_days, epay_pid, created_at) VALUES (?, ?, ?, 0, 0, ?, 'sub', ?, ?, ?, ?, ?)")
+    .run(no, user.id, amountStr, method, plan.name, groups.get(plan.id).group_id, plan.days, merchant.pid, Date.now());
   return {
     order_no: no,
     amount_cny: amountStr,
-    pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API ${plan.name}` }),
+    pay_url: epay.payUrl({ orderNo: no, amount: amountStr, method, name: `星枢 API ${plan.name}`, merchant }),
   };
 }
 
@@ -824,6 +826,9 @@ route('GET', '/api/recharge/orders', async (req) => {
 
 route('GET', /^\/api\/recharge\/(XS\d+)$/, async (req, res, url, m) => {
   const user = auth(req);
+  if (db.prepare("SELECT 1 FROM orders WHERE no = ? AND user_id = ? AND status = 'pending'").get(m[1], user.id)) {
+    await checkPending(m[1]).catch(e => log('查单失败', m[1], e.message));
+  }
   const o = db.prepare('SELECT no, amount_cny, credit_usd, method, status, kind, sub_plan, created_at FROM orders WHERE no = ? AND user_id = ?').get(m[1], user.id);
   if (!o) throw new HttpError(404, '订单不存在');
   return o;
@@ -847,11 +852,34 @@ async function payNotify(req, res, url) {
     log('支付金额不符', order.no, params.money, order.amount_cny);
     return send(res, 400, 'fail');
   }
-  const r = db.prepare("UPDATE orders SET status = 'paid', trade_no = ?, paid_at = ? WHERE no = ? AND status = 'pending'")
-    .run(String(params.trade_no || ''), Date.now(), order.no);
-  if (r.changes === 1) await creditOrder(order.no);
+  await markPaid(order.no, String(params.trade_no || ''));
   return send(res, 200, 'success');
 }
+
+async function markPaid(no, tradeNo) {
+  const r = db.prepare("UPDATE orders SET status = 'paid', trade_no = ?, paid_at = ? WHERE no = ? AND status = 'pending'")
+    .run(tradeNo, Date.now(), no);
+  if (r.changes === 1) await creditOrder(no);
+}
+
+// 主动查单：回调进不来也能到账。用户在 App 里等待时每 3 秒问一次（最多每 5 秒查一次易支付），后台每分钟把 2 小时内没到账的单查一遍
+const queryAt = new Map();
+async function checkPending(no, minGapMs = 5000) {
+  const o = db.prepare("SELECT * FROM orders WHERE no = ? AND status = 'pending'").get(no);
+  if (!o || !config.epay.enabled) return;
+  if (Date.now() - (queryAt.get(no) || 0) < minGapMs) return;
+  queryAt.set(no, Date.now());
+  const q = await epay.query(no, o.epay_pid);
+  if (!q || !q.paid) return;
+  if (money(Number(q.money)) !== o.amount_cny) { log('查单金额不符', no, q.money, o.amount_cny); return; }
+  log('查单确认已付款', no, `商户 ${q.pid}`);
+  await markPaid(no, q.trade_no || 'query');
+}
+setInterval(() => {
+  const rows = db.prepare("SELECT no FROM orders WHERE status = 'pending' AND created_at > ?").all(Date.now() - 2 * 3600 * 1000);
+  for (const r of rows) checkPending(r.no, 50 * 1000).catch(e => log('查单失败', r.no, e.message));
+  for (const [k, t] of queryAt) if (Date.now() - t > 3 * 3600 * 1000) queryAt.delete(k);
+}, 60 * 1000).unref();
 route('GET', '/pay/notify', payNotify, { raw: true });
 route('POST', '/pay/notify', payNotify, { raw: true });
 

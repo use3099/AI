@@ -48,6 +48,7 @@ db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite ON users(invite_code
 db.exec('CREATE INDEX IF NOT EXISTS idx_users_inviter ON users(inviter_id)');
 const ocols = db.prepare('PRAGMA table_info(orders)').all().map(c => c.name);
 if (!ocols.includes('package_id')) db.exec('ALTER TABLE orders ADD COLUMN package_id TEXT');
+if (!ocols.includes('epay_pid')) db.exec('ALTER TABLE orders ADD COLUMN epay_pid TEXT');
 if (!ocols.includes('kind')) db.exec("ALTER TABLE orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'balance'");
 if (!ocols.includes('sub_plan')) db.exec('ALTER TABLE orders ADD COLUMN sub_plan TEXT');
 if (!ocols.includes('sub_group_id')) db.exec('ALTER TABLE orders ADD COLUMN sub_group_id INTEGER');
