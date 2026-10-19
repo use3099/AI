@@ -89,9 +89,9 @@ const mock = http.createServer(async (req, res) => {
   json(404, JSON.stringify({ code: 404, message: 'not found ' + u.pathname }));
 });
 
-function epaySign(params) {
+function epaySign(params, key = EPAY_KEY) {
   const s = Object.keys(params).filter(k => k !== 'sign' && k !== 'sign_type' && params[k] !== '').sort().map(k => `${k}=${params[k]}`).join('&');
-  return crypto.createHash('md5').update(s + EPAY_KEY).digest('hex');
+  return crypto.createHash('md5').update(s + key).digest('hex');
 }
 
 async function main() {
@@ -104,7 +104,7 @@ async function main() {
       ...process.env, PORT: String(port), PUBLIC_URL: 'https://example.test', DATA_DIR: dataDir,
       BFF_JWT_SECRET: 'j'.repeat(48), BFF_DATA_SECRET: 'd'.repeat(48),
       SUB2API_URL: mockUrl, SUB2API_ADMIN_KEY: ADMIN_KEY, SUB2API_GROUP_ID: '2', SUB2API_IMAGE_GROUP_ID: '3', IMAGE_PRICE_NOTE: '每张约 ¥0.05',
-      EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7', WITHDRAW_MIN_USDT: '3',
+      EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7', WITHDRAW_MIN_USDT: '3', EPAY2_URL: 'https://pay2.example.test', EPAY2_PID: '2002', EPAY2_KEY: 'second-merchant-key',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -269,6 +269,19 @@ async function main() {
     r = await api('POST', '/api/recharge', { package: '99', method: 'wxpay' }, ftoken);
     assert.equal(r.status, 400, '不存在的套餐');
 
+    // 第二商户：下一单交替走商户 2，回调用商户 2 的密钥验签
+    const ptoken = ftoken; // 注册接口每小时限 5 次，这里用已有的用户
+    r = await api('POST', '/api/recharge', { amount: 10, method: 'alipay' }, ptoken);
+    const q2 = Object.fromEntries(new URL(r.body.pay_url).searchParams);
+    assert.ok(r.body.pay_url.startsWith('https://pay2.example.test/submit.php?'), '交替到第二商户: ' + r.body.pay_url);
+    assert.equal(q2.pid, '2002'); assert.equal(q2.sign, epaySign(q2, 'second-merchant-key'));
+    const n2 = { pid: '2002', trade_no: 'T9', out_trade_no: r.body.order_no, type: 'alipay', name: 'x', money: '10.00', trade_status: 'TRADE_SUCCESS' };
+    const n2bad = { ...n2 }; n2bad.sign = epaySign(n2bad); n2bad.sign_type = 'MD5';
+    assert.equal((await fetch(base + '/pay/notify?' + new URLSearchParams(n2bad))).status, 400, '商户 2 的单用商户 1 的密钥签名必须拒绝');
+    n2.sign = epaySign(n2, 'second-merchant-key'); n2.sign_type = 'MD5';
+    assert.equal(await (await fetch(base + '/pay/notify?' + new URLSearchParams(n2))).text(), 'success');
+    r = await api('POST', '/api/recharge', { amount: 10, method: 'alipay' }, ptoken);
+    assert.ok(r.body.pay_url.startsWith('https://pay.example.test/'), '再下一单回到第一商户');
     // 对话：流式转发
     const cr = await fetch(base + '/api/chat', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }) });
     assert.equal(cr.status, 200);

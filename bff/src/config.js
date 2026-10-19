@@ -53,6 +53,10 @@ const config = {
     pid: env.EPAY_PID || '',
     key: env.EPAY_KEY || '',
     methods: list('EPAY_METHODS', ['alipay', 'wxpay']),
+    // 第二商户（选填）：填了就两个商户交替收款，这一单 A、下一单 B
+    url2: (env.EPAY2_URL || '').replace(/\/+$/, ''),
+    pid2: env.EPAY2_PID || '',
+    key2: env.EPAY2_KEY || '',
   },
 
   cnyPerUsd: num('CNY_PER_USD', 7.2),                        // 充值 1 美元额度需要多少人民币

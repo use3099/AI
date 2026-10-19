@@ -667,7 +667,7 @@ async function payNotify(req, res, url) {
     const text = await readBody(req, 64 * 1024);
     for (const [k, v] of new URLSearchParams(text)) params[k] = v;
   }
-  if (!config.epay.enabled || !epay.verify(params) || String(params.pid) !== String(config.epay.pid)) {
+  if (!config.epay.enabled || !epay.verify(params)) {
     log('支付回调验签失败', params.out_trade_no);
     return send(res, 400, 'fail');
   }
