@@ -112,6 +112,9 @@ services:
       - EPAY_PID=${EPAY_PID:-}
       - EPAY_KEY=${EPAY_KEY:-}
       - EPAY_METHODS=${EPAY_METHODS:-alipay,wxpay}
+      - EPAY2_URL=${EPAY2_URL:-}
+      - EPAY2_PID=${EPAY2_PID:-}
+      - EPAY2_KEY=${EPAY2_KEY:-}
       - CNY_PER_USD=${CNY_PER_USD:-7.2}
       - RECHARGE_AMOUNTS=${RECHARGE_AMOUNTS:-10,30,50,100,200}
       - ALLOWED_MODELS=${ALLOWED_MODELS:-}
