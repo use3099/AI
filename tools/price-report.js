@@ -6,6 +6,12 @@ const db = require('./src/db');
 const { decrypt } = require('./src/crypto');
 
 const RATE = config.cnyPerUsd;
+// 直接调 sub2api 管理接口（不依赖 BFF 版本）
+const adm = async p => {
+  const j = await fetch(config.sub2api.url + '/api/v1/admin' + p, { headers: { 'x-api-key': config.sub2api.adminKey } }).then(r => r.json());
+  if (j && typeof j.code === 'number' && j.code !== 0) throw new Error(j.message || 'sub2api 出错');
+  return j && 'data' in j ? j.data : j;
+};
 const perM = v => (v == null ? null : Number(v) < 0.01 ? Number(v) * 1e6 : Number(v)); // 每 token → 每百万 token
 const usd = v => (v == null ? '-' : '$' + (+v.toFixed(4)));
 const cny = v => (v == null ? '-' : '¥' + (+(v * RATE).toFixed(3)));
@@ -20,8 +26,10 @@ async function modelsOf(g) {
     const r = db.prepare("SELECT s2_img_key_enc FROM users WHERE s2_img_key_enc IS NOT NULL ORDER BY id DESC LIMIT 1").get();
     if (r) key = decrypt(r.s2_img_key_enc);
   } else {
-    const r = db.prepare('SELECT key_enc FROM sub_keys WHERE group_id = ? LIMIT 1').get(g.id);
-    if (r) key = decrypt(r.key_enc);
+    try {
+      const r = db.prepare('SELECT key_enc FROM sub_keys WHERE group_id = ? LIMIT 1').get(g.id);
+      if (r) key = decrypt(r.key_enc);
+    } catch { /* 旧版没有这个表 */ }
   }
   if (key) {
     try {
@@ -36,16 +44,16 @@ async function modelsOf(g) {
 }
 
 (async () => {
-  const all = await s2.allGroups();
+  const all = await adm('/groups/all');
   const groups = (Array.isArray(all) ? all : all.items || []).filter(g => g.status !== 'inactive' && g.status !== 'disabled');
   const priceCache = new Map();
   const base = async m => {
-    if (!priceCache.has(m)) priceCache.set(m, await s2.modelPricing(m).catch(() => ({ found: false })));
+    if (!priceCache.has(m)) priceCache.set(m, await adm(`/channels/model-pricing?model=${encodeURIComponent(m)}`).catch(() => ({ found: false })));
     return priceCache.get(m);
   };
   console.log(`汇率：1 美元 = ${RATE} 元（CNY_PER_USD）。价格单位：每 100 万 tokens。「一次对话」按 输入 2000 + 输出 800 tokens 估算。\n`);
   for (let g of groups) {
-    try { g = { ...g, ...(await s2.getGroup(g.id)) }; } catch { /* 用列表里的 */ }
+    try { g = { ...g, ...(await adm(`/groups/${g.id}`)) }; } catch { /* 用列表里的 */ }
     const mult = Number(g.rate_multiplier) > 0 ? Number(g.rate_multiplier) : 1;
     const tags = [];
     if (Number(config.sub2api.groupId) === Number(g.id)) tags.push('星枢聊天默认分组（余额）');
