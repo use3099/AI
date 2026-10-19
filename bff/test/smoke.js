@@ -104,7 +104,7 @@ async function main() {
       ...process.env, PORT: String(port), PUBLIC_URL: 'https://example.test', DATA_DIR: dataDir,
       BFF_JWT_SECRET: 'j'.repeat(48), BFF_DATA_SECRET: 'd'.repeat(48),
       SUB2API_URL: mockUrl, SUB2API_ADMIN_KEY: ADMIN_KEY, SUB2API_GROUP_ID: '2', SUB2API_IMAGE_GROUP_ID: '3', IMAGE_PRICE_NOTE: '每张约 ¥0.05',
-      EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7',
+      EPAY_URL: 'https://pay.example.test', EPAY_PID: '1001', EPAY_KEY, CNY_PER_USD: '7', WITHDRAW_MIN_USDT: '3',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -206,7 +206,8 @@ async function main() {
     // 套餐 + 邀请
     r = await api('GET', '/api/config');
     assert.equal(r.body.recharge.packages.length, 4);
-    assert.equal(r.body.referral.percent, 10);
+    assert.equal(r.body.referral.first_percent, 30);
+    assert.equal(r.body.referral.renew_percent, 10);
     r = await api('GET', '/api/invite', null, token);
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const code = r.body.code;
@@ -232,9 +233,37 @@ async function main() {
     r = await api('GET', '/api/me', null, ftoken);
     assert.ok(Math.abs(r.body.balance_usd - 50 / 7 * 1.15) < 1e-4, '好友到账含赠送: ' + r.body.balance_usd);
     r = await api('GET', '/api/me', null, token);
-    assert.ok(Math.abs(r.body.balance_usd - (10 + 50 / 7 * 0.1)) < 1e-4, '邀请人得 10% 返利（不含赠送部分）: ' + r.body.balance_usd);
+    assert.ok(Math.abs(r.body.balance_usd - 10) < 1e-4, '佣金是现金，不再加到邀请人余额: ' + r.body.balance_usd);
     r = await api('GET', '/api/invite', null, token);
     assert.equal(r.body.invited, 1); assert.equal(r.body.paid, 1);
+    assert.equal(r.body.earned_usdt, 2.14, '首充 30%：50/7×0.3: ' + JSON.stringify(r.body));
+    // 好友第二次充值 ¥100：续费 10%
+    r = await api('POST', '/api/recharge', { package: '3', method: 'wxpay' }, ftoken);
+    const fno2 = r.body.order_no;
+    const fn2 = { pid: '1001', trade_no: 'T3', out_trade_no: fno2, type: 'wxpay', name: 'x', money: r.body.amount_cny, trade_status: 'TRADE_SUCCESS' };
+    fn2.sign = epaySign(fn2); fn2.sign_type = 'MD5';
+    assert.equal(await (await fetch(base + '/pay/notify?' + new URLSearchParams(fn2))).text(), 'success');
+    r = await api('GET', '/api/invite', null, token);
+    assert.equal(r.body.earned_usdt, 3.57, '续费 10%：+100/7×0.1: ' + JSON.stringify(r.body));
+    assert.equal(r.body.available_usdt, 3.57);
+    // 提现
+    r = await api('POST', '/api/invite/withdraw', { address: 'abc' }, token);
+    assert.equal(r.status, 400, '地址不对');
+    const addr = 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7';
+    r = await api('POST', '/api/invite/withdraw', { address: addr }, token);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const wid = r.body.id;
+    r = await api('POST', '/api/invite/withdraw', { address: addr }, token);
+    assert.equal(r.status, 400, '同时只能一笔');
+    r = await api('GET', '/api/invite', null, token);
+    assert.equal(r.body.available_usdt, 0); assert.equal(r.body.pending_usdt, 3.57);
+    const sig = act => crypto.createHmac('sha256', 'j'.repeat(48)).update(`wd:${wid}:${act}`).digest('hex').slice(0, 32);
+    r = await api('GET', `/api/admin/withdraw?id=${wid}&act=paid&sig=${'0'.repeat(32)}`);
+    assert.equal(r.status, 403, '签名不对');
+    r = await api('GET', `/api/admin/withdraw?id=${wid}&act=paid&sig=${sig('paid')}`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    r = await api('GET', '/api/invite', null, token);
+    assert.equal(r.body.paid_out_usdt, 3.57); assert.equal(r.body.pending_usdt, 0); assert.equal(r.body.withdrawals[0].status, 'paid');
     r = await api('GET', '/api/recharge/bonus', null, ftoken);
     assert.equal(r.body.first_bonus, 0, '首充赠送只有一次');
     r = await api('POST', '/api/recharge', { package: '99', method: 'wxpay' }, ftoken);

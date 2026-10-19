@@ -65,4 +65,30 @@ CREATE TABLE IF NOT EXISTS referral_rewards (
 CREATE INDEX IF NOT EXISTS idx_ref_inviter ON referral_rewards(inviter_id);
 `);
 
+// 推广佣金（现金，USDT）：每笔被邀请人的充值订单最多一条（order_no 唯一）
+db.exec(`
+CREATE TABLE IF NOT EXISTS commissions (
+  order_no    TEXT PRIMARY KEY,
+  inviter_id  INTEGER NOT NULL,
+  invitee_id  INTEGER NOT NULL,
+  paid_cny    REAL NOT NULL,
+  rate        REAL NOT NULL,
+  first       INTEGER NOT NULL DEFAULT 0,
+  amount_usdt REAL NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_comm_inviter ON commissions(inviter_id);
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL,
+  amount_usdt REAL NOT NULL,
+  address     TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'pending',   -- pending → paid / rejected
+  note        TEXT,
+  created_at  INTEGER NOT NULL,
+  handled_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_wd_user ON withdrawals(user_id);
+`);
+
 module.exports = db;

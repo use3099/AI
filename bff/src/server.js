@@ -185,17 +185,43 @@ async function creditOrder(no) {
     log('充值到账失败，稍后重试', no, e.message);
     return;
   }
-  // 邀请奖励：按好友实付金额对应的额度（不含赠送部分）给邀请人返 REFERRAL_PERCENT%
-  if (user.inviter_id && config.referral.percent > 0) {
-    const base = Number(order.credit_usd) - Number(order.bonus_usd || 0);
-    const amount = Math.round(base * config.referral.percent / 100 * 1e6) / 1e6;
-    if (amount > 0) {
-      db.prepare('INSERT OR IGNORE INTO referral_rewards (order_no, inviter_id, invitee_id, amount_usd, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(order.no, user.inviter_id, user.id, amount, Date.now());
-      await payReward(order.no);
+  // 推广佣金（现金，USDT）：好友首次充值按 REFERRAL_FIRST_PERCENT%，之后每次按 REFERRAL_RENEW_PERCENT%，以实付金额计算
+  if (user.inviter_id) {
+    const n = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE user_id = ? AND status = 'credited'").get(user.id).n;
+    const first = n <= 1;
+    const rate = first ? config.referral.firstPercent : config.referral.renewPercent;
+    const amount = Math.round(Number(order.amount_cny) / config.cnyPerUsd * rate / 100 * 1e6) / 1e6;
+    if (rate > 0 && amount > 0) {
+      const r = db.prepare('INSERT OR IGNORE INTO commissions (order_no, inviter_id, invitee_id, paid_cny, rate, first, amount_usdt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(order.no, user.inviter_id, user.id, Number(order.amount_cny), rate, first ? 1 : 0, amount, Date.now());
+      if (r.changes) log('推广佣金', order.no, `inviter=${user.inviter_id}`, `${first ? '首充' : '续费'} ${rate}%`, `+${amount} USDT`);
     }
   }
 }
+
+// ───────── 推广佣金 / 提现 ─────────
+const round2 = v => Math.round(v * 100) / 100;
+function commissionSummary(userId) {
+  const earned = db.prepare('SELECT COALESCE(SUM(amount_usdt), 0) AS s FROM commissions WHERE inviter_id = ?').get(userId).s;
+  const paidOut = db.prepare("SELECT COALESCE(SUM(amount_usdt), 0) AS s FROM withdrawals WHERE user_id = ? AND status = 'paid'").get(userId).s;
+  const pending = db.prepare("SELECT COALESCE(SUM(amount_usdt), 0) AS s FROM withdrawals WHERE user_id = ? AND status = 'pending'").get(userId).s;
+  return { earned, paidOut, pending, available: Math.max(0, Math.floor((earned - paidOut - pending) * 100) / 100) };
+}
+
+async function tgSend(text) {
+  if (!config.tg.token || !config.tg.chat) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${config.tg.token}/sendMessage`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: config.tg.chat, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (e) { log('TG 通知失败', e.message); }
+}
+
+// 管理员处理提现的链接：每笔单独签名，链接泄露也只能操作那一笔
+const wdSig = (id, act) => crypto.createHmac('sha256', config.jwtSecret).update(`wd:${id}:${act}`).digest('hex').slice(0, 32);
+const wdLink = (id, act) => `${config.publicUrl}${config.basePath}/api/admin/withdraw?id=${id}&act=${act}&sig=${wdSig(id, act)}`;
 
 async function payReward(no) {
   const r = db.prepare("SELECT * FROM referral_rewards WHERE order_no = ? AND status = 'pending'").get(no);
@@ -250,7 +276,7 @@ route('GET', '/api/config', async () => ({
     cny_per_usd: config.cnyPerUsd,
     packages: config.packages,
   },
-  referral: { percent: config.referral.percent, invitee_bonus: config.referral.inviteeBonus },
+  referral: { first_percent: config.referral.firstPercent, renew_percent: config.referral.renewPercent, invitee_bonus: config.referral.inviteeBonus, withdraw_min: config.referral.withdrawMin },
   image: { enabled: !!config.image.groupId, price_note: config.image.priceNote, sizes: IMAGE_SIZES },
 }));
 
@@ -499,17 +525,53 @@ route('GET', '/api/invite', async (req) => {
   const user = auth(req);
   const code = inviteCode(user);
   const invited = db.prepare('SELECT COUNT(*) AS n FROM users WHERE inviter_id = ?').get(user.id).n;
-  const paid = db.prepare('SELECT COUNT(DISTINCT invitee_id) AS n FROM referral_rewards WHERE inviter_id = ?').get(user.id).n;
-  const earned = db.prepare("SELECT COALESCE(SUM(amount_usd), 0) AS s FROM referral_rewards WHERE inviter_id = ? AND status = 'credited'").get(user.id).s;
+  const paid = db.prepare('SELECT COUNT(DISTINCT invitee_id) AS n FROM commissions WHERE inviter_id = ?').get(user.id).n;
+  const sum = commissionSummary(user.id);
+  const withdrawals = db.prepare('SELECT id, amount_usdt, address, status, created_at, handled_at FROM withdrawals WHERE user_id = ? ORDER BY id DESC LIMIT 20').all(user.id);
+  const recent = db.prepare('SELECT invitee_id, paid_cny, rate, first, amount_usdt, created_at FROM commissions WHERE inviter_id = ? ORDER BY created_at DESC LIMIT 20').all(user.id);
   return {
     code,
     link: `${config.publicUrl}${config.basePath}/?ref=${code}`,
-    percent: config.referral.percent,
+    first_percent: config.referral.firstPercent,
+    renew_percent: config.referral.renewPercent,
     invitee_bonus: config.referral.inviteeBonus,
+    withdraw_min: config.referral.withdrawMin,
     invited, paid,
-    earned_usd: Math.round(earned * 1e6) / 1e6,
-    cny_per_usd: config.cnyPerUsd,
+    earned_usdt: round2(sum.earned),
+    available_usdt: sum.available,
+    pending_usdt: round2(sum.pending),
+    paid_out_usdt: round2(sum.paidOut),
+    withdrawals, recent,
   };
+});
+
+// 申请提现：把可提现的佣金全部提到 TRC20 地址；同一时间只能有一笔在处理
+route('POST', '/api/invite/withdraw', async (req) => {
+  const user = auth(req);
+  rateLimit('wd:' + user.id, 5, 3600 * 1000);
+  const body = await readJson(req);
+  const address = String(body.address || '').trim();
+  if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) throw new HttpError(400, '请填写正确的 USDT-TRC20 地址（T 开头，34 位）');
+  if (db.prepare("SELECT 1 FROM withdrawals WHERE user_id = ? AND status = 'pending'").get(user.id)) throw new HttpError(400, '你有一笔提现正在处理，处理完再申请');
+  const sum = commissionSummary(user.id);
+  if (sum.available < config.referral.withdrawMin) throw new HttpError(400, `满 ${config.referral.withdrawMin} USDT 才能提现，当前可提 ${sum.available} USDT`);
+  const id = db.prepare('INSERT INTO withdrawals (user_id, amount_usdt, address, created_at) VALUES (?, ?, ?, ?)').run(user.id, sum.available, address, Date.now()).lastInsertRowid;
+  log('提现申请', `#${id}`, `user=${user.id}`, `${sum.available} USDT`, address);
+  await tgSend(`💸💸💸 <b>星枢 有人申请提现</b>\n\n金额：<b>${sum.available} USDT</b>（TRC20）\n地址：<code>${address}</code>\n用户：${user.account}（#${user.id}）\n累计佣金：${round2(sum.earned)} USDT，已提：${round2(sum.paidOut)} USDT\n\n打完款后点：<a href="${wdLink(id, 'paid')}">✅ 已打款</a>\n不打款点：<a href="${wdLink(id, 'reject')}">❌ 驳回</a>`);
+  return { ok: true, id, amount_usdt: sum.available };
+});
+
+// 管理员：点 TG 里的链接标记「已打款 / 驳回」（驳回后金额退回可提现）
+route('GET', '/api/admin/withdraw', async (req) => {
+  const u = new URL(req.url, 'http://x');
+  const id = Number(u.searchParams.get('id')), act = u.searchParams.get('act'), sig = u.searchParams.get('sig') || '';
+  if (!id || !['paid', 'reject'].includes(act) || sig.length !== 32 || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(wdSig(id, act)))) throw new HttpError(403, '链接无效');
+  const w = db.prepare('SELECT * FROM withdrawals WHERE id = ?').get(id);
+  if (!w) throw new HttpError(404, '没有这笔提现');
+  if (w.status !== 'pending') return { ok: true, message: `这笔提现之前已经处理过了（${w.status === 'paid' ? '已打款' : '已驳回'}）` };
+  db.prepare('UPDATE withdrawals SET status = ?, handled_at = ? WHERE id = ? AND status = ?').run(act === 'paid' ? 'paid' : 'rejected', Date.now(), id, 'pending');
+  log('提现处理', `#${id}`, act);
+  return { ok: true, message: act === 'paid' ? `已标记为「已打款」：${w.amount_usdt} USDT → ${w.address}` : `已驳回，${w.amount_usdt} USDT 退回用户的可提现余额` };
 });
 
 // 价格表：sub2api 的模型默认单价 × 分组倍率（分组里单独定了价就用分组的），换算成「元 / 百万 tokens」

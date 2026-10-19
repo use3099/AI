@@ -68,7 +68,10 @@ ssh -L 8080:127.0.0.1:8080 root@服务器IP
 | `SUB2API_IMAGE_GROUP_ID` | 生图分组 ID（sub2api 里勾选了「允许当前分组生图」的分组）。填了 App 里才出现「AI 生图」；每个用户第一次生图时会自动在这个分组再开一个 Key，聊天和生图分开计价 |
 | `IMAGE_MODELS` | 只给客户显示这些生图模型（逗号分隔），留空 = 生图分组里有什么给什么 |
 | `PACKAGES` | 套餐推荐，格式 `名称:价格:赠送百分比[:hot]`，逗号分隔。默认 `入门:10:0,常用:50:5,超值:100:10:hot,畅享:300:15` |
-| `REFERRAL_PERCENT` | 邀请返利：好友每次充值，邀请人得到实付额度的百分之几（默认 10，填 0 关闭） |
+| `REFERRAL_FIRST_PERCENT` | 推广佣金（USDT 现金）：好友首次充值，推广人得实付金额的百分之几（默认 30） |
+| `REFERRAL_RENEW_PERCENT` | 好友之后每次充值，推广人得百分之几（默认 10） |
+| `WITHDRAW_MIN_USDT` | 满多少 USDT 可申请提现（TRC20，默认 20） |
+| `TG_BOT_TOKEN` / `TG_CHAT_ID` | 提现申请发到这个 Telegram，消息里点链接标记「已打款 / 驳回」 |
 | `REFERRAL_INVITEE_BONUS` | 受邀好友首次充值多送百分之几（默认 10） |
 | `IMAGE_PRICE_NOTE` | 生图页面显示的价格说明，例如 `每张约 ¥0.05`（实际扣费以 sub2api 生图分组的单张价格为准） |
 

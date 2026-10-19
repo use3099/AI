@@ -661,8 +661,8 @@
   const pkgCredit = p => p.price * (1 + p.bonus / 100);
   const refText = () => {
     const r = appCfg && appCfg.referral;
-    if (!r || !(r.percent > 0)) return '把星枢分享给朋友';
-    return `好友每次充值，你得 ${r.percent}% 返利${r.invitee_bonus > 0 ? `；好友首充多送 ${r.invitee_bonus}%` : ''}`;
+    if (!r || !(r.first_percent > 0)) return '把星枢分享给朋友';
+    return `好友首充你拿 ${r.first_percent}%，之后每次 ${r.renew_percent}%，佣金可提现 USDT`;
   };
   // 套餐卡片：横向滑动，点了直接去充值并选中
   function pkgCard(p, i, onSel) {
@@ -693,7 +693,7 @@
       ${pkgStrip()}
       <a class="invite-banner" href="#/invite">
         <span class="ib-icon">${icon.gift}</span>
-        <span class="ib-text"><b>邀请好友，一起用</b><small>${refText()}</small></span>
+        <span class="ib-text"><b>推广赚钱 · 佣金可提现</b><small>${refText()}</small></span>
         ${icon.chev}
       </a>
       <nav class="card list" aria-label="账户">
@@ -838,37 +838,53 @@
       <p class="muted tiny center">实际扣费以「使用记录」为准。一次普通对话通常只要几分钱。</p>`;
   }
 
-  // 邀请好友
+  // 推广中心：邀请好友 → 拿佣金（USDT）→ 提现
   async function viewInvite() {
-    pageShell('邀请好友', `<p class="muted center pad">${wavebars}</p>`, '#/account');
+    pageShell('推广赚钱', `<p class="muted center pad">${wavebars}</p>`, '#/account');
     let d;
     try { d = await api('GET', '/invite'); } catch (e) { return toast(e.message, 'err'); }
-    const rate = d.cny_per_usd || cnyPerUsd;
+    const pending = d.withdrawals.find(w => w.status === 'pending');
+    const canWd = !pending && d.available_usdt >= d.withdraw_min;
+    const wdState = { pending: '处理中', paid: '已到账', rejected: '已驳回' };
+    const day = t => new Date(t).toLocaleDateString();
     $('.page-body').innerHTML = `
       <section class="invite-hero">
         ${tide('bal-tide')}
-        <p class="muted">我的邀请码</p>
-        <p class="code" id="invCode">${esc(d.code)}</p>
+        <p class="muted">可提现佣金</p>
+        <p class="code"><span id="invA">0.00</span> <small>USDT</small></p>
         <div class="inv-actions">
-          <button class="btn primary pill" id="invShare">${icon.share}分享邀请链接</button>
-          <button class="btn pill ghost-light" id="invCopy">${icon.copy}复制邀请码</button>
+          <button class="btn primary pill" id="invWd" ${canWd ? '' : 'disabled'}>${pending ? '提现处理中' : `申请提现${canWd ? '' : `（满 ${d.withdraw_min} USDT）`}`}</button>
         </div>
       </section>
       <section class="inv-stats">
-        <div><b id="invN">${d.invited}</b><small>已邀请</small></div>
+        <div><b>${d.invited}</b><small>已邀请</small></div>
         <div><b>${d.paid}</b><small>已充值</small></div>
-        <div><b>¥<span id="invE">0.00</span></b><small>累计返利</small></div>
+        <div><b><span id="invE">0.00</span></b><small>累计佣金 USDT</small></div>
       </section>
       <section class="card steps">
-        <h2>怎么拿奖励</h2>
+        <h2>我的邀请码 <b class="inv-code">${esc(d.code)}</b></h2>
+        <div class="inv-actions">
+          <button class="btn primary pill" id="invShare">${icon.share}分享邀请链接</button>
+          <button class="btn pill ghost" id="invCopy">${icon.copy}复制邀请码</button>
+        </div>
         <ol>
           <li><b>分享</b><span>把邀请链接或邀请码发给朋友</span></li>
           <li><b>注册</b><span>朋友用你的链接注册，或注册时填你的邀请码${d.invitee_bonus > 0 ? `，首次充值多送 ${d.invitee_bonus}%` : ''}</span></li>
-          <li><b>返利</b><span>朋友以后每次充值，你都得到 ${d.percent}% 的额度，自动到账</span></li>
+          <li><b>拿佣金</b><span>朋友第一次充值，你拿实付金额的 <b>${d.first_percent}%</b>；之后每次充值，你拿 <b>${d.renew_percent}%</b></span></li>
+          <li><b>提现</b><span>满 ${d.withdraw_min} USDT 就能提现到你的 USDT-TRC20 地址，人工审核后打款</span></li>
         </ol>
       </section>
-      <p class="muted tiny center">返利以充值实付金额计算，不含赠送部分。</p>`;
-    countUp($('#invE'), d.earned_usd * rate, v => v.toFixed(2));
+      <form class="card form" id="wdForm" hidden>
+        <h2>提现 ${d.available_usdt} USDT</h2>
+        <label class="field">USDT 收款地址（TRC20 网络）<input name="address" autocomplete="off" spellcheck="false" placeholder="T 开头，34 位" required></label>
+        <p class="muted tiny">请仔细核对地址，填错打款无法追回。只支持 TRC20 网络。</p>
+        <button class="btn dark block lg" type="submit">确认提现</button>
+      </form>
+      ${d.withdrawals.length ? `<section class="card list-plain"><h2>提现记录</h2>${d.withdrawals.map(w => `<p class="row"><span>${day(w.created_at)} · ${w.amount_usdt} USDT</span><span class="tag ${w.status}">${wdState[w.status] || w.status}</span></p>`).join('')}</section>` : ''}
+      ${d.recent.length ? `<section class="card list-plain"><h2>佣金明细</h2>${d.recent.map(c => `<p class="row"><span>${day(c.created_at)} · 好友${c.first ? '首充' : '续费'} ¥${c.paid_cny}（${c.rate}%）</span><b>+${(+c.amount_usdt).toFixed(2)}</b></p>`).join('')}</section>` : ''}
+      <p class="muted tiny center">佣金按好友实付金额计算，不含赠送部分。</p>`;
+    countUp($('#invA'), d.available_usdt, v => v.toFixed(2));
+    countUp($('#invE'), d.earned_usdt, v => v.toFixed(2));
     const copy = async (text, ok) => {
       try { await navigator.clipboard.writeText(text); toast(ok, 'ok'); }
       catch { prompt('长按复制', text); }
@@ -879,6 +895,15 @@
       if (navigator.share) { try { await navigator.share({ title: '星枢 API', text, url: d.link }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
       copy(text, '邀请链接已复制，发给朋友吧');
     };
+    $('#invWd').onclick = () => { if (!canWd) return; const f = $('#wdForm'); f.hidden = false; f.scrollIntoView({ behavior: 'smooth' }); f.address.focus(); };
+    $('#wdForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const address = e.target.address.value.trim();
+      if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(address)) return toast('地址不对：USDT-TRC20 地址是 T 开头、34 位', 'warn');
+      if (!confirm(`确认把 ${d.available_usdt} USDT 提现到\n${address}\n？`)) return;
+      try { await api('POST', '/invite/withdraw', { address }); toast('已提交，审核后打款到你的地址', 'ok'); viewInvite(); }
+      catch (err) { toast(err.message, 'err'); }
+    });
   }
 
   function viewPassword() {

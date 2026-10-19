@@ -477,3 +477,16 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* 推广中心 */
+.invite-hero .code small { font-size: 15px; font-weight: 600; opacity: .7; letter-spacing: 0; }
+.invite-hero .btn[disabled] { opacity: .55; cursor: not-allowed; }
+.inv-code { margin-left: 6px; color: var(--jade); letter-spacing: .12em; }
+.steps .inv-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
+.list-plain h2 { font-size: 15px; margin: 0 0 8px; }
+.list-plain .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--hair); font-size: 13px; margin: 0; }
+.list-plain .row:first-of-type { border-top: 0; }
+.list-plain .row b { color: var(--jade); }
+.tag.paid { background: var(--jade-soft); color: var(--jade); }
+.tag.rejected { background: var(--hair-2); color: var(--faint); }
+.form[hidden] { display: none !important; }

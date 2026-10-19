@@ -72,11 +72,16 @@ const config = {
   },
   // 套餐推荐：名称:价格(元):赠送百分比[:hot]，逗号分隔。hot 的那个显示「推荐」
   packages: parsePackages(env.PACKAGES || '入门:10:0,常用:50:5,超值:100:10:hot,畅享:300:15'),
-  // 邀请奖励：好友每次充值，邀请人得到到账额度的 REFERRAL_PERCENT%；好友首次充值额外多送 REFERRAL_INVITEE_BONUS%
+  // 推广佣金（现金，USDT）：好友首次充值，推广人得实付金额的 REFERRAL_FIRST_PERCENT%；之后每次得 REFERRAL_RENEW_PERCENT%
+  // 满 WITHDRAW_MIN_USDT 可申请提现（TRC20），TG 通知管理员人工打款。好友首充额外多送 REFERRAL_INVITEE_BONUS% 额度
   referral: {
-    percent: num('REFERRAL_PERCENT', 10),
+    firstPercent: num('REFERRAL_FIRST_PERCENT', 30),
+    renewPercent: num('REFERRAL_RENEW_PERCENT', 10),
     inviteeBonus: num('REFERRAL_INVITEE_BONUS', 10),
+    withdrawMin: num('WITHDRAW_MIN_USDT', 20),
   },
+  // 提现申请通知（Telegram）
+  tg: { token: (env.TG_BOT_TOKEN || '').trim(), chat: (env.TG_CHAT_ID || '').trim() },
   trustProxy: (env.TRUST_PROXY || 'true') === 'true',
 };
 
