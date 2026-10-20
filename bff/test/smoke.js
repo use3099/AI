@@ -51,7 +51,7 @@ const mock = http.createServer(async (req, res) => {
       let sub = state.subs.find(x => x.user_id === body.user_id && x.group_id === body.group_id);
       const exp = new Date(Date.now() + body.validity_days * 86400000).toISOString();
       if (!sub) { sub = { id: state.nextSub++, user_id: body.user_id, group_id: body.group_id }; state.subs.push(sub); }
-      Object.assign(sub, { status: 'active', expires_at: exp, notes: body.notes, daily_usage_usd: 0, weekly_usage_usd: 0, monthly_usage_usd: 0 });
+      Object.assign(sub, { status: 'active', expires_at: exp, notes: body.notes, daily_usage_usd: 0, weekly_usage_usd: 4.6, monthly_usage_usd: 7.3 });
       return json(200, ok(sub));
     }
     if ((m = u.pathname.match(/^\/api\/v1\/admin\/subscriptions\/(\d+)\/extend$/)) && req.method === 'POST') {

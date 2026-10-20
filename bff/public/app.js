@@ -694,11 +694,15 @@
   }
   function subStatus(sub) {
     if (!sub) return '';
-    const bar = (used, lim, label) => lim == null ? '' : `<div class="sub-bar"><span>${label}</span><i><b data-css="width:${Math.min(100, (used || 0) / lim * 100).toFixed(1)}%"></b></i><small>¥${((used || 0) * cnyPerUsd).toFixed(2)} / ¥${(lim * cnyPerUsd).toFixed(0)}</small></div>`;
+    const bar = (used, lim, label) => {
+      if (lim == null || !(lim > 0)) return '';
+      const pct = Math.min(100, (used || 0) / lim * 100);
+      return `<div class="sub-bar ${pct >= 90 ? 'warn' : ''}"><span>${label}</span><i><b data-css="width:${pct.toFixed(1)}%"></b></i><small><b>${pct < 10 && pct > 0 ? pct.toFixed(1) : Math.round(pct)}%</b> · ¥${((used || 0) * cnyPerUsd).toFixed(2)} / ¥${(lim * cnyPerUsd).toFixed(0)}</small></div>`;
+    };
     return `<section class="card sub-card">
         <div class="sec-head"><h2>${esc(sub.name)}</h2><a href="#/recharge?sub=${sub.plan}">续费</a></div>
         <p class="muted tiny">到期：${new Date(sub.expires_at).toLocaleString()} · 额度用完自动改用余额</p>
-        ${bar(sub.daily_used, sub.daily_usd, '今日')}${bar(sub.weekly_used, sub.weekly_usd, '本周')}${bar(sub.monthly_used, sub.monthly_usd, '本月')}
+        ${bar(sub.weekly_used, sub.weekly_usd, '周限额')}${bar(sub.monthly_used, sub.monthly_usd, '月限额')}${bar(sub.daily_used, sub.daily_usd, '日限额')}
       </section>`;
   }
 
