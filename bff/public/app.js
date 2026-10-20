@@ -677,7 +677,7 @@
   function pkgStrip(link = true) {
     const list = pkgs();
     if (!list.length) return '';
-    return `<section class="pkg-sec"><div class="sec-head"><h2>套餐推荐</h2>${link ? '<a href="#/pricing">看价格表</a>' : '<a href="#/recharge">去充值</a>'}</div>
+    return `<section class="pkg-sec"><div class="sec-head"><h2>按量充值</h2>${link ? '<a href="#/pricing">看价格表</a>' : '<a href="#/recharge">去充值</a>'}</div>
       <div class="pkgs">${list.map((p, i) => pkgCard(p, i)).join('')}</div></section>`;
   }
 
@@ -691,6 +691,13 @@
         <span class="pkg-get">${p.days} 天</span>
         <span class="pkg-bonus plain">${quota(p).length ? esc(quota(p).join(' · ')) + ' 用量' : '包月畅用'}</span>
       </button>`;
+  }
+  // 没买套餐的：在「我的」页直接展示包月套餐，点了去充值页并选中
+  function subStrip() {
+    const list = (appCfg && appCfg.sub_plans) || [];
+    if (!list.length) return '';
+    return `<section class="pkg-sec"><div class="sec-head"><h2>包月套餐</h2><a href="#/recharge">去开通</a></div>
+      <div class="pkgs">${list.map((p, i) => subCard(p, i).replace('<button type="button"', `<a href="#/recharge?sub=${p.id}"`).replace(/<\/button>\s*$/, '</a>')).join('')}</div></section>`;
   }
   function subStatus(sub) {
     if (!sub) return '';
@@ -715,7 +722,7 @@
         <p class="big"><span class="cur">¥</span><span id="bigBal">0.00</span></p>
         <a class="btn primary pill" href="#/recharge">充值</a>
       </section>
-      ${subStatus(me.subscription)}
+      ${me.subscription ? subStatus(me.subscription) : subStrip()}
       ${pkgStrip()}
       <a class="invite-banner" href="#/invite">
         <span class="ib-icon">${icon.gift}</span>
